@@ -489,7 +489,7 @@ button:disabled {
 
 .ocr-controls {
   display: grid;
-  grid-template-columns: minmax(150px, 0.7fr) minmax(180px, 1.3fr);
+  grid-template-columns: minmax(140px, 0.7fr) minmax(170px, 1.1fr) minmax(110px, 0.7fr);
   gap: 10px;
   margin-bottom: 10px;
 }
@@ -583,6 +583,15 @@ button:disabled {
 .mini-btn.warn {
   color: var(--red);
   background: var(--red-soft);
+}
+
+.tiny {
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #edf5fa;
+  color: var(--primary-dark);
+  font-size: 12px;
 }
 
 .badge {
@@ -759,6 +768,24 @@ button:disabled {
 
 .import-audit-table td:last-child {
   white-space: normal;
+}
+
+.audit-detail-row td {
+  background: #fbfdfe;
+}
+
+.import-audit-actions {
+  min-width: 760px;
+}
+
+.import-audit-actions th,
+.import-audit-actions td {
+  width: auto;
+  font-size: 12px;
+}
+
+.import-audit-actions td:nth-child(4) {
+  min-width: 160px;
 }
 
 .import-conflict-details {

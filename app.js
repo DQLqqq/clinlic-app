@@ -52,6 +52,7 @@ let pendingImportPackage = null;
 let pendingImportPreview = null;
 let pendingImportResolutions = {};
 let pendingImportInProgress = false;
+let expandedImportAuditId = "";
 
 const sampleLabOcrText = `申请日期: 2026-01-03 10:52:53
 报告名称: 血细胞分析(血常规)
@@ -171,6 +172,9 @@ const ocrEngineModes = [
   { key: "desktopBridge", label: "桌面OCR桥接" },
   { key: "localHttp", label: "本机HTTP OCR服务" }
 ];
+
+const OCR_SCHEMA_VERSION = "local-ocr-v1";
+const localOcrHosts = new Set(["localhost", "127.0.0.1", "::1"]);
 const importTableDefinitions = [
   { path: "data/patient_master.csv", label: "患者主表" },
   { path: "data/encounter.csv", label: "住院次" },
@@ -619,6 +623,10 @@ function renderLabScreenshotImport(patient) {
               <label>本机服务地址</label>
               <input data-ocr-config="endpoint" value="${escapeAttr(cfg.endpoint)}" />
             </div>
+            <div class="field">
+              <label>超时(ms)</label>
+              <input data-ocr-config="timeoutMs" type="number" min="1000" max="60000" step="1000" value="${escapeAttr(cfg.timeoutMs)}" />
+            </div>
           </div>
           <div class="field">
             <label>OCR识别文本</label>
@@ -849,21 +857,72 @@ function renderImportAuditPanel() {
       <h3>最近导入审计 <span class="badge">${state.importAuditLog.length} 次</span></h3>
       ${logs.length ? `
         <table class="data-table compact-table import-audit-table">
-          <thead><tr><th>处理时间</th><th>导出批次</th><th>来源设备</th><th>处理摘要</th></tr></thead>
+          <thead><tr><th>处理时间</th><th>导出批次</th><th>来源设备</th><th>处理摘要</th><th>详情</th></tr></thead>
           <tbody>
-            ${logs.map((log) => `
+            ${logs.map((log) => {
+              const expanded = expandedImportAuditId === log.audit_id;
+              return `
               <tr>
                 <td>${escapeHtml(formatDateTime(log.processed_at))}</td>
                 <td>${escapeHtml(log.export_id || "--")}</td>
                 <td>${escapeHtml(log.source_device || "--")}</td>
                 <td>${escapeHtml(formatImportAuditSummary(log.summary))}</td>
+                <td><button class="tiny" data-import-audit-toggle="${escapeAttr(log.audit_id)}" type="button">${expanded ? "收起" : "查看"}</button></td>
               </tr>
-            `).join("")}
+              ${expanded ? `<tr class="audit-detail-row"><td colspan="5">${renderImportAuditActions(log)}</td></tr>` : ""}
+            `;
+            }).join("")}
           </tbody>
         </table>
       ` : `<div class="empty">暂无导入处理记录。</div>`}
     </section>
   `;
+}
+
+function renderImportAuditActions(log) {
+  const actions = Array.isArray(log.actions) ? log.actions : [];
+  if (!actions.length) return `<div class="empty">本批次没有逐条动作。</div>`;
+  return `
+    <table class="data-table compact-table import-audit-actions">
+      <thead><tr><th>对象</th><th>动作</th><th>研究编号</th><th>原因</th><th>本机引用</th><th>导入引用</th><th>结果引用</th></tr></thead>
+      <tbody>
+        ${actions.map((action) => `
+          <tr>
+            <td>${escapeHtml(formatAuditScope(action.scope))}</td>
+            <td>${escapeHtml(formatAuditAction(action.action))}</td>
+            <td>${escapeHtml(action.research_id || "--")}</td>
+            <td>${escapeHtml(action.reason || "--")}</td>
+            <td>${escapeHtml(action.local_ref || "--")}</td>
+            <td>${escapeHtml(action.incoming_ref || "--")}</td>
+            <td>${escapeHtml(action.result_ref || "--")}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function formatAuditScope(scope) {
+  return {
+    patient: "患者主表",
+    encounters: "住院次",
+    diagnoses: "诊断记录",
+    labs: "化验结果",
+    reports: "报告文本",
+    followup: "随访记录"
+  }[scope] || scope || "--";
+}
+
+function formatAuditAction(action) {
+  return {
+    import_patient: "新增病例",
+    skip_duplicate: "跳过重复",
+    skip_patient: "跳过冲突病例",
+    import_patient_copy: "导入病例副本",
+    merge_detail_new: "合并新增明细",
+    skip_detail: "跳过冲突明细",
+    import_detail_copy: "导入明细副本"
+  }[action] || action || "--";
 }
 
 function formatImportAuditSummary(summary = {}) {
@@ -872,6 +931,7 @@ function formatImportAuditSummary(summary = {}) {
     `病例副本 ${summary.patientCopies || 0}`,
     `新增明细 ${summary.detailImported || 0}`,
     `明细副本 ${summary.detailCopies || 0}`,
+    `重复跳过 ${summary.skipped || 0}`,
     `跳过冲突 ${summary.conflictSkipped || 0}`,
     `明细冲突跳过 ${summary.detailConflictSkipped || 0}`
   ].join(" · ");
@@ -1125,6 +1185,14 @@ function bindActiveTabEvents(patient) {
     select.addEventListener("change", () => {
       pendingImportResolutions[select.dataset.importResolutionKey] = select.value;
       toast("已更新冲突处理方式");
+    });
+  });
+
+  document.querySelectorAll("[data-import-audit-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const auditId = button.dataset.importAuditToggle;
+      expandedImportAuditId = expandedImportAuditId === auditId ? "" : auditId;
+      renderActiveTab();
     });
   });
 }
@@ -1432,8 +1500,11 @@ function bindOcrEvents(patient) {
   document.querySelectorAll("[data-ocr-config]").forEach((input) => {
     input.addEventListener("input", () => {
       const key = input.dataset.ocrConfig;
-      state.ocrConfig[key] = key === "timeoutMs" ? Number(input.value) : input.value;
+      state.ocrConfig[key] = key === "timeoutMs" ? normalizeOcrTimeout(input.value) : input.value;
       saveState();
+    });
+    input.addEventListener("change", () => {
+      if (input.dataset.ocrConfig === "timeoutMs") input.value = normalizeOcrTimeout(input.value);
     });
   });
 }
@@ -1663,14 +1734,17 @@ async function runWorkbenchOcrForPatient(patient) {
 function buildOcrRequest(patient, workbench) {
   return {
     request_id: uid("ocr"),
+    schema_version: OCR_SCHEMA_VERSION,
     app_schema_version: "v3",
+    created_at: new Date().toISOString(),
     task: "lab_table_ocr",
     image: labScreenshotOcrPayload
       ? {
         name: labScreenshotOcrPayload.name,
         size: labScreenshotOcrPayload.size,
         type: labScreenshotOcrPayload.type,
-        data_url: labScreenshotOcrPayload.dataUrl
+        data_url: labScreenshotOcrPayload.dataUrl,
+        retain_image: false
       }
       : null,
     manual_text: workbench.ocr_text || "",
@@ -1684,34 +1758,44 @@ function buildOcrRequest(patient, workbench) {
       patient_uid: patient.patient_uid,
       research_id: patient.research_id,
       image_name: workbench.image_name || ""
+    },
+    privacy: {
+      offline_only: true,
+      store_image: false,
+      human_confirm_required: true
     }
   };
 }
 
 async function requestOcrText(request) {
   const cfg = state.ocrConfig;
+  const timeoutMs = normalizeOcrTimeout(cfg.timeoutMs);
   if (cfg.mode === "manual") {
     return {
       text: request.manual_text || sampleLabOcrText,
       engine: request.manual_text ? "手动粘贴文本" : "样例OCR文本"
     };
   }
+  if (!request.image && !request.manual_text) throw new Error("请先选择截图或粘贴文本");
   if (cfg.mode === "desktopBridge") {
     const bridge = window.clinicalOcrBridge;
     const recognize = bridge?.recognizeLabImage || bridge?.recognizeImage;
     if (!recognize) throw new Error("未检测到桌面OCR桥接");
-    return normalizeOcrResponse(await recognize(request));
+    return normalizeOcrResponse(await withTimeout(Promise.resolve(recognize(request)), timeoutMs, "桌面OCR超时"));
   }
   if (cfg.mode === "localHttp") {
+    const endpoint = normalizeLocalOcrEndpoint(cfg.endpoint);
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), Number(cfg.timeoutMs) || 15000);
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(cfg.endpoint, {
+      const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Clinical-OCR-Schema": OCR_SCHEMA_VERSION },
         body: JSON.stringify(request),
-        signal: controller.signal
+        signal: controller.signal,
+        redirect: "error"
       });
+      assertLocalOcrResponseUrl(response.url);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const contentType = response.headers.get("content-type") || "";
       const payload = contentType.includes("application/json") ? await response.json() : await response.text();
@@ -1724,12 +1808,70 @@ async function requestOcrText(request) {
 }
 
 function normalizeOcrResponse(payload) {
-  if (typeof payload === "string") return { text: payload, engine: state.ocrConfig.mode };
+  if (typeof payload === "string") {
+    const text = payload.trim();
+    if (!text) throw new Error("OCR响应为空");
+    return { text, engine: state.ocrConfig.mode };
+  }
+  if (!payload || typeof payload !== "object") throw new Error("OCR响应格式错误");
+  if (payload.error) throw new Error(String(payload.error));
+  const text = extractOcrText(payload);
+  if (!text.trim()) throw new Error("OCR响应缺少识别文本");
   return {
-    text: payload.text || payload.ocr_text || payload.result || "",
+    text,
     engine: payload.engine || payload.provider || state.ocrConfig.mode,
     confidence: payload.confidence || ""
   };
+}
+
+function extractOcrText(payload) {
+  if (typeof payload.text === "string") return payload.text;
+  if (typeof payload.ocr_text === "string") return payload.ocr_text;
+  if (typeof payload.result === "string") return payload.result;
+  if (typeof payload.full_text === "string") return payload.full_text;
+  if (Array.isArray(payload.lines)) {
+    return payload.lines
+      .map((line) => {
+        if (typeof line === "string") return line;
+        if (line && typeof line === "object") return line.text || line.value || "";
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (payload.data && typeof payload.data === "object") return extractOcrText(payload.data);
+  return "";
+}
+
+function normalizeLocalOcrEndpoint(endpoint) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error("OCR服务地址格式错误");
+  }
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("OCR服务只支持 HTTP/HTTPS");
+  const hostname = url.hostname.replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  if (!localOcrHosts.has(hostname) && !hostname.endsWith(".localhost")) throw new Error("OCR服务地址必须是本机地址");
+  return url.toString();
+}
+
+function assertLocalOcrResponseUrl(responseUrl) {
+  if (!responseUrl) return;
+  normalizeLocalOcrEndpoint(responseUrl);
+}
+
+function normalizeOcrTimeout(value) {
+  const ms = Number(value) || 15000;
+  return Math.min(60000, Math.max(1000, Math.round(ms)));
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
 }
 
 function runLabOcrForPatient(patient, options = {}) {
@@ -2027,7 +2169,7 @@ function buildCorePropsXml() {
 function buildAppPropsXml(sheets) {
   return xmlDeclaration(`\
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>Clinical Data App Static Prototype</Application>
+  <Application>Clinical Research Data Collection App</Application>
   <TitlesOfParts>
     <vt:vector size="${sheets.length}" baseType="lpstr">
       ${sheets.map((sheet) => `<vt:lpstr>${escapeXml(sheet.name)}</vt:lpstr>`).join("\n      ")}
