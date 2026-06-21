@@ -1,0 +1,8 @@
+tier,runner,model_candidate,hardware_target,use_case,offline_package_notes
+default,rules_knowledge_base,规则助手,i5/8GB或更低,软件使用帮助/字段解释/质控提示,随APP内置;不需要模型文件;最稳妥
+small_llm,llama.cpp,Qwen/Qwen3-0.6B,i5/8GB,短文本字段解释/简单候选抽取,模型文件随安装包或U盘复制;记录SHA-256
+small_llm,llama.cpp,Qwen/Qwen3-1.7B-GGUF,i5/16GB,中文问答/报告段落候选抽取,限制上下文2K-4K;批量导出时暂停推理
+small_llm,llama.cpp,Qwen/Qwen3-4B-GGUF,i5/16GB或有独显,更自然的聊天帮助和候选抽取解释,仅在性能验证通过后启用
+small_llm,llama.cpp,ggml-org/gemma-4-E2B-it-GGUF,i5/16GB,中英混合软件帮助备用,确认许可证和医院部署允许范围
+small_llm,llama.cpp,ggml-org/gemma-4-E4B-it-GGUF,i5/16GB或有独显,更自然的聊天帮助和抽取解释,仅在性能验证通过后启用
+dev,Ollama,Qwen/Gemma等开发模型,开发电脑,提示词调试/效果比较,正式离线医院版不依赖在线拉取

@@ -1,0 +1,35 @@
+export_group,field_key,field_label,source_table,source_column,default_selected,unit_rule,notes
+病人筛选,research_id,研究编号,patient_master,research_id,yes,,默认导出
+病人筛选,inpatient_no,住院号,patient_master,inpatient_no,no,,脱敏导出时可关闭
+病人筛选,medical_record_no,病案号,patient_master,medical_record_no,no,,脱敏导出时可关闭
+基本信息,sex,性别,patient_master,sex,yes,,
+基本信息,age_at_admission,入院年龄,patient_master,age_at_admission,yes,岁,
+入院信息,admission_date,入院时间,encounter,admission_date,yes,,
+入院信息,discharge_date,出院时间,encounter,discharge_date,no,,
+入院信息,length_of_stay_days,住院天数,encounter,length_of_stay_days,yes,天,由入院时间和出院时间自动计算
+入院信息,department,科室,encounter,department,no,,
+诊断记录,primary_diagnosis,主诊断,diagnosis,diagnosis_text,yes,,从 is_primary=true 或诊断排序取值
+诊断记录,all_diagnoses,全部诊断,diagnosis,diagnosis_text,no,,多条诊断用分号合并
+诊断记录,diagnosis_long,诊断明细长表,diagnosis,*,no,,单独工作表 diagnoses_long
+检查化验,lab_long,检验明细长表,lab_result,*,yes,结果值列紧邻unit_raw/unit_std列,推荐统计分析使用
+检查化验,lab_wide_admission_first,入院首次化验宽表,lab_result,selected_items,no,列名=项目名_入院首次 (单位),例如 白蛋白_入院首次 (g/L)
+检查化验,lab_wide_preop_nearest,术前最近化验宽表,lab_result,selected_items,no,列名=项目名_术前最近一次 (单位),例如 CA19-9_术前最近一次 (U/mL)
+检查化验,lab_wide_postop_first,术后首次化验宽表,lab_result,selected_items,no,列名=项目名_术后首次 (单位),
+检查化验,lab_wide_last,最后一次化验宽表,lab_result,selected_items,no,列名=项目名_最后一次 (单位),
+检查化验,lab_wide_minmax,住院期间极值化验宽表,lab_result,selected_items,no,列名=项目名_最低值/最高值_住院期间 (单位),
+检查化验,lab_wide_range_all,日期范围内全部化验,lab_result,selected_items,no,长表输出更合适,
+影像病理,imaging_report_text,影像报告内容,report_record,report_text_raw,no,,只保存报告文字不保存图片
+影像病理,pathology_report_text,病理报告内容,report_record,report_text_raw,no,,只保存报告文字不保存图片
+影像病理,report_summary,报告结构化摘要,report_record,structured_summary,no,,AI候选需人工确认
+治疗手术,surgery_date,手术日期,treatment,treatment_date,no,,筛选 treatment_type=手术
+治疗手术,surgery_detail,手术详情,treatment,detail,no,,筛选 treatment_type=手术
+治疗手术,adjuvant_therapy,辅助治疗,treatment,detail,no,,筛选 treatment_type=辅助治疗/化疗/放疗
+术后随访,last_followup_date,末次随访时间,followup,followup_date,yes,,取最新随访
+术后随访,survival_status,生存状态,followup,survival_status,yes,,取最新随访
+术后随访,recurrence_status,复发状态,followup,recurrence_status,no,,取最新随访
+术后随访,recurrence_site,复发部位,followup,recurrence_site,no,,取最新随访
+导出审计,export_time,导出时间,export_job,created_at,yes,,写入说明页
+导出审计,diagnosis_filter,诊断筛选条件,export_job,diagnosis_filter,yes,,写入说明页
+导出审计,field_selection,字段清单,export_job,field_selection,yes,,写入说明页
+导出审计,lab_time_rule,化验时间规则,export_job,lab_time_rule,yes,,写入说明页
+导出审计,checksum,导出校验值,export_job,checksum,yes,SHA256,写入manifest和说明页

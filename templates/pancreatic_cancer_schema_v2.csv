@@ -1,0 +1,147 @@
+table,column,label,type,required,unit_or_options,notes
+common,record_uuid,记录UUID,text,yes,,所有可导入表必须包含
+common,content_hash,内容哈希,text,no,SHA256,用于跨电脑去重和冲突识别
+patient_master,patient_uid,患者内部ID,text,yes,,系统生成主键
+patient_master,research_id,研究编号,text,yes,,导出使用的脱敏编号
+patient_master,inpatient_no,住院号,text,yes,,需人工确认
+patient_master,medical_record_no,病案号,text,yes,,需人工确认
+patient_master,name_token,姓名脱敏码,text,yes,,不得保存真实姓名
+patient_master,sex,性别,enum,yes,男|女|未知,
+patient_master,birth_date,出生日期,date,no,,可用于计算年龄
+patient_master,age_at_admission,入院年龄,number,no,岁,可由入院时间计算
+patient_master,qc_status,质控状态,enum,yes,待确认|已质控|随访中|缺失项过多,
+encounter,encounter_id,就诊/住院次ID,text,yes,,系统生成
+encounter,patient_uid,患者内部ID,text,yes,,关联 patient_master
+encounter,admission_date,入院时间,date,no,,
+encounter,discharge_date,出院时间,date,no,,
+encounter,length_of_stay_days,住院天数,number,no,天,由入院时间和出院时间自动计算
+encounter,length_of_stay_calc_method,住院天数算法,text,no,出院日期-入院日期+1,派生字段说明
+encounter,length_of_stay_source,住院天数来源,text,no,admission_date+discharge_date,导出说明页展示
+encounter,length_of_stay_status,住院天数状态,enum,no,已计算|待出院|日期错误|缺失,
+encounter,department,科室,text,no,,
+encounter,visit_type,就诊类型,enum,no,门诊|住院|急诊|随访|其他,
+encounter,source_system,来源系统,text,no,HIS|病案系统|人工录入,
+diagnosis,diagnosis_id,诊断ID,text,yes,,系统生成
+diagnosis,patient_uid,患者内部ID,text,yes,,关联 patient_master
+diagnosis,encounter_id,就诊/住院次ID,text,no,,关联 encounter
+diagnosis,diagnosis_text_raw,原始诊断文本,text,yes,,保留HIS/病历原文
+diagnosis,diagnosis_name_std,标准诊断名称,text,no,,人工确认或字典映射后填写
+diagnosis,diagnosis_code,诊断编码,text,no,ICD-10|ICD-O|院内编码,
+diagnosis,diagnosis_role,诊断角色,enum,yes,主诊断|伴随诊断|入院诊断|出院诊断|术前诊断|术后诊断|病理诊断|并发症|合并症|既往史|复发诊断|死亡原因|其他,
+diagnosis,diagnosis_status,诊断状态,enum,no,疑似|临床诊断|影像提示|病理证实|术后证实|排除|不详,
+diagnosis,is_primary_for_model,是否本研究主疾病,boolean,no,是|否,
+diagnosis,sort_order,诊断顺序,number,no,,同一次就诊内诊断排序
+diagnosis,diagnosis_date,诊断日期,date,no,,
+diagnosis,source_doc,来源文档,text,no,HIS页面|出院记录|病理报告|随访记录,
+diagnosis,confirm_status,确认状态,enum,yes,AI候选|人工确认|忽略,
+diagnosis,confirmed_by,确认人,text,no,,离线环境可用操作员initials
+diagnosis,confirmed_at,确认时间,datetime,no,,
+history,history_id,病史ID,text,yes,,系统生成
+history,patient_uid,患者内部ID,text,yes,,关联 patient_master
+history,history_type,病史类型,enum,yes,吸烟|饮酒|糖尿病|慢性胰腺炎|肿瘤家族史|既往手术|其他,
+history,value_text,病史内容,text,no,,
+history,confirm_status,确认状态,enum,yes,AI候选|人工确认|忽略,
+lab_item_dictionary,item_key,检验项目键,text,yes,,如 ca199 albumin tbil
+lab_item_dictionary,item_name_std,标准项目名,text,yes,,如 CA19-9
+lab_item_dictionary,aliases,别名,text,no,,多个别名用分号分隔
+lab_item_dictionary,category,项目类别,text,no,肿瘤标志物|血常规|肝功能|肾功能|凝血|炎症|血糖|其他,
+lab_item_dictionary,value_type,结果类型,enum,no,numeric|text|boolean|mixed,
+lab_item_dictionary,preferred_unit,推荐单位,text,no,,仅作提示不强制覆盖原始单位
+lab_item_dictionary,allowed_units,允许单位,text,no,,多个单位用分号分隔
+lab_item_dictionary,conversion_rule,单位换算规则,text,no,,第一版可为空
+lab_item_dictionary,is_core_for_pancreatic_cancer,是否胰腺癌核心项,boolean,no,是|否,
+lab_item_dictionary,active,是否启用,boolean,yes,是|否,
+lab_report,lab_report_id,检验报告ID,text,yes,,系统生成
+lab_report,patient_uid,患者内部ID,text,yes,,关联 patient_master
+lab_report,encounter_id,就诊/住院次ID,text,no,,关联 encounter
+lab_report,source_system,来源系统,text,no,LIS|HIS|报告PDF|OCR|人工录入,
+lab_report,specimen_time,采样时间,datetime,no,,
+lab_report,report_time,报告时间,datetime,no,,
+lab_report,report_name,报告名称,text,no,,
+lab_report,source_ref,来源定位,text,no,,截图/报告/页面定位
+lab_result,lab_result_id,检验结果ID,text,yes,,系统生成
+lab_result,lab_report_id,检验报告ID,text,yes,,关联 lab_report
+lab_result,patient_uid,患者内部ID,text,yes,,便于快速筛选
+lab_result,encounter_id,就诊/住院次ID,text,no,,便于按住院次筛选
+lab_result,item_key,检验项目键,text,no,,可为空但应尽量匹配字典
+lab_result,item_name_raw,原始项目名,text,yes,,保留 HIS/LIS 原文
+lab_result,item_name_std,标准项目名,text,no,,字典映射后填写
+lab_result,value_raw,原始结果,text,yes,,保留 > < 阴性 阳性 未测 等原文
+lab_result,comparator,比较符,enum,no,>|<|>=|<=|=,
+lab_result,value_num,数值结果,number,no,,能解析时填写
+lab_result,value_text,文本结果,text,no,,阴性/阳性/弱阳性/未测等
+lab_result,unit_raw,原始单位,text,no,,导出时必须保留
+lab_result,unit_std,标准单位,text,no,,有可靠换算时填写
+lab_result,conversion_applied,是否单位换算,boolean,no,是|否,
+lab_result,conversion_note,换算说明,text,no,,记录换算依据或不换算原因
+lab_result,ref_low,参考范围下限,number,no,,
+lab_result,ref_high,参考范围上限,number,no,,
+lab_result,reference_range,参考范围原文,text,no,,
+lab_result,abnormal_flag,异常标记,enum,no,高|低|正常|异常|不详,
+lab_result,specimen_time,采样时间,datetime,no,,便于多次化验排序
+lab_result,report_time,报告时间,datetime,no,,便于多次化验排序
+lab_result,days_from_index_event,距索引事件天数,number,no,天,可由诊断/手术/治疗日期计算
+lab_result,source_text,来源原文,text,no,,用于追溯
+lab_result,ai_confidence,AI置信度,number,no,0-1,仅作候选提示
+lab_result,confirm_status,确认状态,enum,yes,AI候选|人工确认|有疑问|忽略,
+lab_result,confirmed_by,确认人,text,no,,离线环境可用操作员initials
+lab_result,confirmed_at,确认时间,datetime,no,,
+imaging_pathology,record_id,影像病理记录ID,text,yes,,系统生成
+imaging_pathology,patient_uid,患者内部ID,text,yes,,关联 patient_master
+imaging_pathology,record_type,记录类型,enum,yes,CT|MRI|超声|病理|其他,
+imaging_pathology,record_date,记录日期,date,no,,
+imaging_pathology,summary,摘要,text,no,,AI候选需确认
+report_record,report_id,报告ID,text,yes,,系统生成
+report_record,patient_uid,患者内部ID,text,yes,,关联 patient_master
+report_record,encounter_id,就诊/住院次ID,text,no,,关联 encounter
+report_record,report_type,报告类型,enum,yes,影像报告|病理报告|检查报告|手术记录|出院记录|随访记录|其他,
+report_record,report_date,报告日期,date,no,,
+report_record,report_title,报告标题,text,no,,
+report_record,report_text_raw,报告原文,text,yes,,默认只保存文字不保存图片
+report_record,report_text_hash,报告文本哈希,text,no,SHA256,用于去重和追溯
+report_record,structured_summary,结构化摘要,json,no,,AI候选需人工确认
+report_record,source_system,来源系统,text,no,HIS|PACS|病理系统|病案系统|人工录入,
+report_record,source_ref,来源定位,text,no,,报告号或页面定位
+report_record,deid_status,脱敏状态,enum,no,未脱敏|已脱敏|不含身份信息,
+report_record,store_image_flag,是否保存图片,boolean,yes,否,第一版固定为否
+report_record,confirm_status,确认状态,enum,yes,AI候选|人工确认|有疑问|忽略,
+treatment,treatment_id,治疗记录ID,text,yes,,系统生成
+treatment,patient_uid,患者内部ID,text,yes,,关联 patient_master
+treatment,treatment_type,治疗类型,enum,yes,手术|新辅助治疗|辅助治疗|化疗|放疗|介入|其他,
+treatment,treatment_date,治疗日期,date,no,,
+treatment,detail,治疗详情,text,no,,AI候选需确认
+followup,followup_id,随访记录ID,text,yes,,系统生成
+followup,patient_uid,患者内部ID,text,yes,,关联 patient_master
+followup,followup_date,随访日期,date,yes,,
+followup,survival_status,生存状态,enum,yes,生存|死亡|失访|不详,
+followup,recurrence_status,复发状态,enum,no,无|有|不详,
+followup,recurrence_site,复发部位,text,no,,
+followup,source_doc,来源文档,text,no,随访记录|HIS页面|电话随访,
+export_job,export_id,导出任务ID,text,yes,,系统生成
+export_job,created_at,导出时间,datetime,yes,,
+export_job,patient_filter,病人筛选条件,json,no,,保存筛选逻辑
+export_job,diagnosis_filter,诊断筛选条件,json,no,,支持单诊断/多诊断/排除诊断
+export_job,field_selection,字段选择,json,yes,,保存自选字段
+export_job,lab_time_rule,化验时间规则,json,no,,入院首次/术前最近/范围内全部等
+export_job,usb_target,导出U盘路径,text,no,,
+export_job,checksum,校验值,text,no,SHA256,
+import_job,import_id,导入任务ID,text,yes,,分析电脑APP生成
+import_job,export_id,原导出批次ID,text,yes,,用于去重
+import_job,created_at,导入时间,datetime,yes,,
+import_job,source_usb_path,U盘包路径,text,no,,
+import_job,manifest_checksum,清单校验值,text,no,SHA256,
+import_job,import_status,导入状态,enum,yes,待校验|校验通过|已导入|失败|重复批次,
+import_job,records_imported,导入记录数,number,no,,
+import_job,records_skipped,跳过重复数,number,no,,
+ai_chat_session,chat_session_id,聊天会话ID,text,yes,,系统生成
+ai_chat_session,created_at,创建时间,datetime,yes,,
+ai_chat_session,operator_id,操作员,text,no,,离线账号或initials
+ai_chat_session,topic,主题,text,no,软件帮助|字段解释|导出指导|质控说明,
+ai_chat_session,local_model_name,本地模型名称,text,no,,轻量离线模型
+ai_chat_session,knowledge_base_version,知识库版本,text,no,,软件说明文档版本
+ai_chat_session,retention_policy,保存策略,enum,yes,不保存患者内容|保存最近20轮|手动清空,
+ai_chat_message,message_id,聊天消息ID,text,yes,,系统生成
+ai_chat_message,chat_session_id,聊天会话ID,text,yes,,关联 ai_chat_session
+ai_chat_message,role,角色,enum,yes,用户|AI助手|系统,
+ai_chat_message,message_text,消息内容,text,yes,,不得自动上传
+ai_chat_message,contains_patient_data,是否含患者数据,boolean,yes,是|否,

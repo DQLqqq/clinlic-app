@@ -1,0 +1,20 @@
+path,required,description,validation_rule,analysis_import_rule
+export_manifest.json,yes,导出清单和筛选条件,必须包含export_id app_version schema_version source_site source_device created_at file_checksums,作为导入审计主表
+checksum.sha256,yes,文件完整性校验,所有包内文件SHA-256必须匹配,校验失败则整包拒绝导入
+export_report.txt,yes,导出报告,记录病人数 就诊数 报告数 化验记录数 附件数 成功/失败状态,归档到import_logs
+excel/export.xlsx,yes,人看的Excel工作簿,必须包含患者主表且一行一个患者,供人工查看和初步分析
+data/patient_master.csv,yes,患者主表机器表,必须包含record_uuid content_hash patient_uid research_id,APP导入优先读取
+data/encounter.csv,yes,住院次机器表,必须包含record_uuid content_hash patient_uid admission_date discharge_date length_of_stay_days,导入 staging.encounter
+data/diagnosis.csv,yes,诊断机器表,必须包含record_uuid content_hash patient_uid diagnosis_text_raw diagnosis_role diagnosis_status,导入 staging.diagnosis
+data/lab_report.csv,yes,检验报告机器表,必须包含record_uuid content_hash patient_uid specimen_time report_time,导入 staging.lab_report
+data/lab_result.csv,yes,检验结果机器表,必须包含record_uuid content_hash patient_uid item_name_raw value_raw unit_raw specimen_time,导入 staging.lab_result
+data/report_record.csv,yes,报告文本机器表,必须包含record_uuid content_hash patient_uid report_type report_text_raw report_text_hash store_image_flag,导入 staging.report_record
+data/treatment.csv,yes,治疗机器表,必须包含record_uuid content_hash patient_uid treatment_type treatment_date,导入 staging.treatment
+data/followup.csv,yes,随访机器表,必须包含record_uuid content_hash patient_uid followup_date survival_status,导入 staging.followup
+dict/field_dictionary.csv,yes,字段字典,必须包含字段名 类型 来源 是否派生,导入字段说明
+dict/unit_dictionary.csv,yes,单位字典,必须包含项目名 原始单位 推荐单位 换算说明,导入单位说明
+data/lab_results_long.csv,no,兼容旧版检验长表,必须包含patient_uid item_name_raw value_raw unit_raw specimen_time,兼容导入 staging.lab_result
+data/diagnoses_long.csv,no,兼容旧版诊断长表,必须包含patient_uid diagnosis_text_raw diagnosis_role diagnosis_status,兼容导入 staging.diagnosis
+evidence/,no,脱敏证据片段目录,仅允许必要片段 不默认完整截图,按SHA-256去重保存
+attachments/,no,附件目录,不得包含未脱敏身份信息 附件需在manifest登记,按SHA-256去重保存
+import_preview.json,no,分析电脑导入预览,包含导出批次 病人数 字段数 重复记录数 冲突记录数,导入前由分析电脑APP生成

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>临床研究数据采集系统</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f6fb2'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='20' font-family='Arial' font-weight='700' fill='white'%3EC%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">C</div>
+          <div>
+            <h1>临床研究数据采集系统</h1>
+            <p>离线版 v0.2 · 专病模板可切换 · 本机采集 / U盘转移 / 分析电脑导入</p>
+          </div>
+        </div>
+        <div class="system-strip" id="systemStrip"></div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-actions">
+            <button class="primary" id="addPatientBtn" type="button">新建病例</button>
+            <label class="ghost file-action">
+              导入包
+              <input id="importPackageInput" type="file" accept=".json,application/json" />
+            </label>
+          </div>
+          <div class="search-box">
+            <input id="patientSearch" type="search" placeholder="搜索研究编号 / 诊断 / 状态" />
+          </div>
+          <div class="filter-row">
+            <button class="chip active" data-list-filter="all" type="button">全部</button>
+            <button class="chip" data-list-filter="待确认" type="button">待确认</button>
+            <button class="chip" data-list-filter="已质控" type="button">已质控</button>
+            <button class="chip" data-list-filter="随访中" type="button">随访中</button>
+          </div>
+          <div class="patient-list" id="patientList"></div>
+        </aside>
+
+        <section class="case-panel">
+          <div class="case-header" id="caseHeader"></div>
+          <div class="case-metrics" id="caseMetrics"></div>
+
+          <div class="tabs" id="mainTabs" role="tablist">
+            <button class="tab active" data-tab="overview" type="button">总览</button>
+            <button class="tab" data-tab="encounter" type="button">入院信息</button>
+            <button class="tab" data-tab="diagnosis" type="button">多诊断</button>
+            <button class="tab" data-tab="labs" type="button">检查化验</button>
+            <button class="tab" data-tab="reports" type="button">报告内容</button>
+            <button class="tab" data-tab="export" type="button">导出导入</button>
+            <button class="tab" data-tab="model" type="button">模型配置</button>
+          </div>
+
+          <div class="tab-panel" id="tabPanel"></div>
+        </section>
+
+        <aside class="ai-panel">
+          <div class="ai-tabs" id="aiTabs">
+            <button class="ai-tab active" data-ai-tab="capture" type="button">截图导入</button>
+            <button class="ai-tab" data-ai-tab="candidates" type="button">候选确认</button>
+            <button class="ai-tab" data-ai-tab="chat" type="button">AI助手</button>
+            <button class="ai-tab" data-ai-tab="trace" type="button">来源追溯</button>
+          </div>
+          <div class="ai-content" id="aiContent"></div>
+        </aside>
+      </main>
+      <footer class="bottom-status" id="bottomStatus"></footer>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>
