@@ -757,6 +757,10 @@ button:disabled {
   margin-top: 2px;
 }
 
+.import-audit-table td:last-child {
+  white-space: normal;
+}
+
 .import-conflict-details {
   min-width: 220px;
   max-width: 420px;
@@ -781,6 +785,21 @@ button:disabled {
   margin: 4px 0 8px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.resolution-control {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.resolution-control span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.resolution-control select {
+  width: 100%;
 }
 
 .conflict-table {

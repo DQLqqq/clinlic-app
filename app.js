@@ -50,6 +50,7 @@ let labScreenshotPreviewUrl = "";
 let labScreenshotOcrPayload = null;
 let pendingImportPackage = null;
 let pendingImportPreview = null;
+let pendingImportResolutions = {};
 let pendingImportInProgress = false;
 
 const sampleLabOcrText = `申请日期: 2026-01-03 10:52:53
@@ -84,6 +85,7 @@ const state = {
   activeExportPanel: "patients",
   listFilter: "all",
   search: "",
+  importAuditLog: [],
   exportConfig: {
     selectedPatients: [],
     diagnosisInclude: "",
@@ -134,7 +136,7 @@ const knowledgeBase = [
   },
   {
     keys: ["u盘", "导入", "另一台", "checksum", "manifest"],
-    answer: "U 盘包包含 export_manifest.json、checksum.sha256、excel/患者主表.csv 和 data/*.csv。另一台 APP 导入时先校验 SHA-256，再进入 staging，按 record_uuid + content_hash 去重。正式桌面版可生成真正的 .xlsx。"
+    answer: "U 盘包包含 export_manifest.json、checksum.sha256、excel/患者主表.csv 和 data/*.csv。另一台 APP 导入时先校验 SHA-256，再进入待处理区，按 record_uuid + content_hash 去重。导出区可生成多 Sheet .xlsx。"
   },
   {
     keys: ["ca19", "ca199", "CA19-9"],
@@ -146,19 +148,19 @@ const knowledgeBase = [
   },
   {
     keys: ["报告", "影像", "病理", "图片", "dicom"],
-    answer: "首版只保存影像/病理报告文字、报告号、结构化摘要和来源定位，不保存 DICOM、病理切片或大截图，以降低存储压力和转移风险。"
+    answer: "系统只保存影像/病理报告文字、报告号、结构化摘要和来源定位，不保存 DICOM、病理切片或大截图，以降低存储压力和转移风险。"
   },
   {
     keys: ["AI", "助手", "聊天", "大模型"],
-    answer: "首版离线助手使用本地知识库和规则质控。它能解释软件使用、字段口径和错误提示，不能诊断、不能给治疗建议、不能绕过人工确认修改数据库。"
+    answer: "离线助手使用本地知识库和规则质控。它能解释软件使用、字段口径和错误提示，不能诊断、不能给治疗建议、不能绕过人工确认修改数据库。"
   },
   {
     keys: ["开源", "模型", "llama", "qwen", "gemma", "ollama"],
-    answer: "正式桌面版建议默认规则助手，可选 llama.cpp + GGUF 小模型。选择模型文件后要校验 SHA-256，再启用；低配电脑优先小模型并限制上下文 2K-4K。"
+    answer: "建议默认规则助手，可选 llama.cpp + GGUF 小模型。选择模型文件后要校验 SHA-256，再启用；低配电脑优先小模型并限制上下文 2K-4K。"
   },
   {
     keys: ["截图", "ocr", "化验截图", "检验截图", "图片导入"],
-    answer: "截图导入的闭环是：选择 HIS/LIS 截图，只临时预览；本机 OCR 得到文字；解析出化验候选；人工确认后写入检查化验长表；原图不入库。浏览器原型支持粘贴 OCR 文字解析，桌面版接 Windows OCR 或 PaddleOCR 自动识别。"
+    answer: "截图导入的闭环是：选择 HIS/LIS 截图，只临时预览；本机 OCR 得到文字；解析出化验候选；人工确认后写入检查化验长表；原图不入库。也可手动粘贴 OCR 文字，或接入 Windows OCR / PaddleOCR 自动识别。"
   }
 ];
 
@@ -286,6 +288,7 @@ function loadState() {
       state.exportConfig = { ...state.exportConfig, ...(parsed.exportConfig || {}) };
       state.modelConfig = { ...state.modelConfig, ...(parsed.modelConfig || {}) };
       state.ocrConfig = { ...state.ocrConfig, ...(parsed.ocrConfig || {}) };
+      state.importAuditLog = Array.isArray(parsed.importAuditLog) ? parsed.importAuditLog : [];
       state.activeExportPanel = parsed.activeExportPanel || state.activeExportPanel;
       state.activeAiTab = parsed.activeAiTab || state.activeAiTab;
       if (!["capture", "candidates", "chat", "trace"].includes(state.activeAiTab)) state.activeAiTab = "capture";
@@ -310,6 +313,7 @@ function saveState() {
       exportConfig: state.exportConfig,
       modelConfig: state.modelConfig,
       ocrConfig: state.ocrConfig,
+      importAuditLog: state.importAuditLog.slice(0, 50),
       activeExportPanel: state.activeExportPanel,
       activeAiTab: state.activeAiTab,
       chat: state.chat.slice(-20)
@@ -338,7 +342,7 @@ function renderSystemStrip() {
     statusPill("离线运行", "good"),
     statusPill("本地库", "good"),
     statusPill(`${storage} ${usedKb}KB`, dataLevel),
-    statusPill("桌面版显示磁盘剩余", "warn"),
+    statusPill("磁盘剩余待检测", "warn"),
     statusPill("U盘待选择", "warn"),
     statusPill(`AI ${state.modelConfig.mode}`, modelLevel)
   ];
@@ -429,7 +433,7 @@ function renderHeader() {
   });
 
   document.getElementById("deletePatientBtn").addEventListener("click", () => {
-    if (!confirm(`删除 ${patient.research_id}？此操作只影响当前原型本地数据。`)) return;
+    if (!confirm(`删除 ${patient.research_id}？此操作只影响当前本地数据。`)) return;
     state.patients = state.patients.filter((item) => item.patient_uid !== patient.patient_uid);
     if (!state.patients.length) state.patients.push(createPatient());
     state.activePatientId = state.patients[0].patient_uid;
@@ -618,7 +622,7 @@ function renderLabScreenshotImport(patient) {
           </div>
           <div class="field">
             <label>OCR识别文本</label>
-            <textarea data-ocr-text placeholder="桌面版会自动OCR；浏览器原型可先粘贴本机OCR文字或复制的化验表文本。">${escapeHtml(workbench.ocr_text || "")}</textarea>
+            <textarea data-ocr-text placeholder="可粘贴本机OCR文字或复制的化验表文本。">${escapeHtml(workbench.ocr_text || "")}</textarea>
           </div>
           <div class="inline-row" style="margin-top:10px">
             <button class="secondary" data-action="run-workbench-ocr" type="button">运行本机OCR</button>
@@ -663,7 +667,7 @@ function renderReports(patient) {
       <h3>粘贴报告原文，生成本地 AI 候选</h3>
       <div class="field">
         <label>报告原文</label>
-        <textarea id="reportScratch" placeholder="可粘贴 HIS/PACS/病理报告文本；首版只做本地规则抽取。">${escapeHtml(patient.report_scratch || "")}</textarea>
+        <textarea id="reportScratch" placeholder="可粘贴 HIS/PACS/病理报告文本；本机规则会抽取候选摘要。">${escapeHtml(patient.report_scratch || "")}</textarea>
       </div>
       <div class="inline-row" style="margin-top:10px">
         <button class="secondary" type="button" data-action="extract-candidates">生成候选字段</button>
@@ -696,6 +700,7 @@ function renderExport(patient) {
   return `
     <div class="export-stack">
         ${renderImportPreviewPanel()}
+        ${renderImportAuditPanel()}
         <section class="section-card">
           <h3>自选导出配置</h3>
           <div class="form-grid">
@@ -772,6 +777,7 @@ function renderImportPreviewPanel() {
 
   const preview = pendingImportPreview;
   const fieldLabels = preview.fieldLabels.length ? preview.fieldLabels : preview.patientColumns;
+  const canConfirm = canConfirmImportPreview(preview);
   return `
     <section class="section-card import-panel">
       <h3>待导入包预览 <span class="badge ${preview.conflictCount ? "bad" : "good"}">${preview.checksumStatus}</span></h3>
@@ -814,12 +820,61 @@ function renderImportPreviewPanel() {
         </table>
       </div>
       <div class="inline-row import-actions">
-        <button class="primary" data-action="confirm-import-package" type="button" ${preview.newCount || preview.detailNewCount ? "" : "disabled"} ${pendingImportInProgress ? "disabled" : ""}>${pendingImportInProgress ? "正在导入..." : "确认合并数据"}</button>
+        <button class="primary" data-action="confirm-import-package" type="button" ${canConfirm ? "" : "disabled"} ${pendingImportInProgress ? "disabled" : ""}>${pendingImportInProgress ? "正在导入..." : "确认导入/处理"}</button>
         <button class="ghost" data-action="cancel-import-package" type="button">取消导入</button>
         <span class="badge">重复病例可合并新增明细，冲突记录不会自动覆盖</span>
       </div>
     </section>
   `;
+}
+
+function canConfirmImportPreview(preview) {
+  return Boolean(preview?.newCount || preview?.detailNewCount || preview?.conflictCount || preview?.detailConflictCount);
+}
+
+function buildDefaultImportResolutions(preview) {
+  const resolutions = {};
+  (preview?.patientRows || []).forEach((row) => {
+    (row.conflictDetails || []).forEach((detail) => {
+      resolutions[detail.resolutionKey] = detail.kind === "patient" ? "skip_patient" : "skip_detail";
+    });
+  });
+  return resolutions;
+}
+
+function renderImportAuditPanel() {
+  const logs = state.importAuditLog.slice(0, 5);
+  return `
+    <section class="section-card import-panel">
+      <h3>最近导入审计 <span class="badge">${state.importAuditLog.length} 次</span></h3>
+      ${logs.length ? `
+        <table class="data-table compact-table import-audit-table">
+          <thead><tr><th>处理时间</th><th>导出批次</th><th>来源设备</th><th>处理摘要</th></tr></thead>
+          <tbody>
+            ${logs.map((log) => `
+              <tr>
+                <td>${escapeHtml(formatDateTime(log.processed_at))}</td>
+                <td>${escapeHtml(log.export_id || "--")}</td>
+                <td>${escapeHtml(log.source_device || "--")}</td>
+                <td>${escapeHtml(formatImportAuditSummary(log.summary))}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      ` : `<div class="empty">暂无导入处理记录。</div>`}
+    </section>
+  `;
+}
+
+function formatImportAuditSummary(summary = {}) {
+  return [
+    `新增病例 ${summary.imported || 0}`,
+    `病例副本 ${summary.patientCopies || 0}`,
+    `新增明细 ${summary.detailImported || 0}`,
+    `明细副本 ${summary.detailCopies || 0}`,
+    `跳过冲突 ${summary.conflictSkipped || 0}`,
+    `明细冲突跳过 ${summary.detailConflictSkipped || 0}`
+  ].join(" · ");
 }
 
 function renderImportConflictDetails(row) {
@@ -832,6 +887,7 @@ function renderImportConflictDetails(row) {
         <div class="conflict-block">
           <strong>${escapeHtml(detail.scope)} · ${escapeHtml(detail.title)}</strong>
           <p>${escapeHtml(detail.reason)}</p>
+          ${renderImportResolutionControl(detail)}
           <table class="conflict-table">
             <tbody>
               ${detail.fields.map((field) => `
@@ -847,6 +903,34 @@ function renderImportConflictDetails(row) {
       `).join("")}
     </details>
   `;
+}
+
+function renderImportResolutionControl(detail) {
+  const value = getImportResolution(detail);
+  const options = detail.kind === "patient"
+    ? [
+      ["skip_patient", "跳过冲突病例"],
+      ["import_patient_copy", "导入为病例副本"]
+    ]
+    : [
+      ["skip_detail", "跳过冲突明细"],
+      ["import_detail_copy", "导入为明细副本"]
+    ];
+  return `
+    <label class="resolution-control">
+      <span>处理方式</span>
+      <select data-import-resolution-key="${escapeAttr(detail.resolutionKey)}">
+        ${options.map(([key, label]) => `<option value="${escapeAttr(key)}" ${value === key ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function getImportResolution(detail) {
+  if (!detail?.resolutionKey) return detail?.kind === "patient" ? "skip_patient" : "skip_detail";
+  const defaultAction = detail.kind === "patient" ? "skip_patient" : "skip_detail";
+  if (!pendingImportResolutions[detail.resolutionKey]) pendingImportResolutions[detail.resolutionKey] = defaultAction;
+  return pendingImportResolutions[detail.resolutionKey];
 }
 
 function renderModelConfig() {
@@ -1036,6 +1120,13 @@ function bindActiveTabEvents(patient) {
   document.querySelectorAll("[data-import-package-input]").forEach((input) => {
     input.addEventListener("change", handleImportFile);
   });
+
+  document.querySelectorAll("[data-import-resolution-key]").forEach((select) => {
+    select.addEventListener("change", () => {
+      pendingImportResolutions[select.dataset.importResolutionKey] = select.value;
+      toast("已更新冲突处理方式");
+    });
+  });
 }
 
 async function handleAction(action, button) {
@@ -1183,7 +1274,7 @@ async function handleAction(action, button) {
     state.activeAiTab = "chat";
     state.chat.push({
       role: "assistant",
-      text: "推荐先用规则助手跑通流程；需要真实本地模型时，用 llama.cpp + GGUF 小模型。开发阶段可用 Ollama 测试，正式离线部署时固定模型文件、版本和 SHA-256。"
+      text: "推荐先用规则助手跑通流程；需要真实本地模型时，用 llama.cpp + GGUF 小模型。离线部署时固定模型文件、版本和 SHA-256。"
     });
     renderAiTabs();
     renderAiContent();
@@ -1602,7 +1693,7 @@ async function requestOcrText(request) {
   if (cfg.mode === "manual") {
     return {
       text: request.manual_text || sampleLabOcrText,
-      engine: request.manual_text ? "手动粘贴文本" : "浏览器原型模拟OCR"
+      engine: request.manual_text ? "手动粘贴文本" : "样例OCR文本"
     };
   }
   if (cfg.mode === "desktopBridge") {
@@ -1645,7 +1736,7 @@ function runLabOcrForPatient(patient, options = {}) {
   const workbench = getOcrWorkbench(patient);
   if (!workbench.ocr_text.trim() && options.allowSampleFallback) {
     workbench.ocr_text = sampleLabOcrText;
-    workbench.ocr_engine = "浏览器原型模拟OCR";
+    workbench.ocr_engine = "样例OCR文本";
   }
   if (!workbench.ocr_text.trim()) return 0;
   const candidates = extractLabCandidatesFromText(workbench.ocr_text, workbench.image_name || "化验截图");
@@ -1678,7 +1769,7 @@ async function handleModelFile(file) {
     state.modelConfig.modelFileHash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
     state.modelConfig.status = "模型文件已校验";
   } else {
-    state.modelConfig.modelFileHash = "大文件将在桌面版流式校验";
+    state.modelConfig.modelFileHash = "大文件将在后台流式校验";
     state.modelConfig.status = "模型文件已选择";
   }
   saveState();
@@ -1772,6 +1863,7 @@ function buildExportReport(patients, preview) {
   const qcIssues = patients.flatMap((patient) => getQcIssues(patient));
   const pendingCandidates = patients.reduce((sum, patient) => sum + getCandidates(patient).length, 0);
   const selectedFieldLabels = getSelectedExportFields().map((field) => field.label).join("、") || "未选择";
+  const latestAudit = state.importAuditLog[0];
   const diagnosisFilter = [
     state.exportConfig.diagnosisInclude && `包含=${state.exportConfig.diagnosisInclude}`,
     state.exportConfig.diagnosisAnd && `AND=${state.exportConfig.diagnosisAnd}`,
@@ -1788,7 +1880,9 @@ function buildExportReport(patients, preview) {
     { label: "缺失/逻辑提醒", value: `${qcIssues.length} 项` },
     { label: "诊断筛选", value: diagnosisFilter },
     { label: "化验时间规则", value: state.exportConfig.labRule },
-    { label: "字段选择", value: selectedFieldLabels }
+    { label: "字段选择", value: selectedFieldLabels },
+    { label: "导入审计次数", value: `${state.importAuditLog.length} 次` },
+    { label: "最近导入审计", value: latestAudit ? `${formatDateTime(latestAudit.processed_at)} · ${formatImportAuditSummary(latestAudit.summary)}` : "无" }
   ];
   const text = [
     "临床研究数据采集系统导出报告",
@@ -1810,7 +1904,7 @@ function buildExportPreflight(patients, preview) {
       { text: `预计包 ${estimatedKb}KB`, level: estimatedKb > 1024 ? "warn" : "good" },
       { text: `缺失/逻辑提醒 ${qcIssues.length} 项`, level: qcIssues.length ? "warn" : "good" },
       { text: `AI候选待确认 ${pendingCandidates} 条`, level: pendingCandidates ? "warn" : "good" },
-      { text: "正式桌面版导出前复核U盘空间", level: "warn" }
+      { text: "导出前复核U盘空间", level: "warn" }
     ]
   };
 }
@@ -2107,6 +2201,7 @@ async function handleImportFile(event) {
     const preview = await previewImportPackage(data);
     pendingImportPackage = data;
     pendingImportPreview = preview;
+    pendingImportResolutions = buildDefaultImportResolutions(preview);
     state.activeTab = "export";
     toast(`已生成导入预览：新增 ${preview.newCount} 例，重复 ${preview.duplicateCount} 例，冲突 ${preview.conflictCount} 例`);
     render();
@@ -2213,10 +2308,22 @@ function classifyImportPatient(row, relatedRows = null) {
     return {
       ...row,
       status: "duplicate",
-      statusText: "可合并明细",
-      level: "good",
+      statusText: detailPreview.conflicts ? "可合并/有冲突" : "可合并明细",
+      level: detailPreview.conflicts ? "bad" : "good",
       reason: `本机已有病例，可新增 ${detailPreview.newRecords} 条明细${detailPreview.conflicts ? `，${detailPreview.conflicts} 条冲突待处理` : ""}`,
       detailNewCount: detailPreview.newRecords,
+      detailConflictCount: detailPreview.conflicts,
+      conflictDetails: detailPreview.conflictDetails
+    };
+  }
+  if (detailPreview.conflicts) {
+    return {
+      ...row,
+      status: "duplicate",
+      statusText: "明细冲突",
+      level: "bad",
+      reason: `本机已有病例，${detailPreview.conflicts} 条明细冲突待处理`,
+      detailNewCount: 0,
       detailConflictCount: detailPreview.conflicts,
       conflictDetails: detailPreview.conflictDetails
     };
@@ -2266,6 +2373,8 @@ function buildPatientConflictDetails(existing, incoming, reason) {
     .filter((field) => field.local !== field.incoming);
   return [
     {
+      kind: "patient",
+      resolutionKey: patientResolutionKey(incoming),
       scope: "患者主表",
       title: incoming.research_id || existing.research_id || "未命名病例",
       reason,
@@ -2286,11 +2395,22 @@ function buildRelatedConflictDetail(collection, incomingRow, definition) {
     }))
     .filter((field) => field.local !== field.incoming);
   return {
+    kind: "detail",
+    definitionKey: definition.key,
+    resolutionKey: detailResolutionKey(definition, incomingRow),
     scope: definition.label,
     title: incomingRow[definition.idField] || incomingRow.record_uuid || "未命名记录",
     reason: "本机已有同ID明细，但字段内容不同",
     fields: fields.length ? fields : [{ label: "content_hash", local: existing.content_hash || "", incoming: incomingRow.content_hash || "" }]
   };
+}
+
+function patientResolutionKey(row) {
+  return `patient:${row.record_uuid || row.patient_uid || row.research_id || "unknown"}`;
+}
+
+function detailResolutionKey(definition, row) {
+  return `detail:${definition.key}:${row.record_uuid || row[definition.idField] || "unknown"}`;
 }
 
 function classifyRelatedRecord(collection, incomingRow, definition) {
@@ -2359,7 +2479,7 @@ async function confirmPendingImport() {
   renderActiveTab();
   try {
     const result = await importPackage(pendingImportPackage);
-    const summary = `导入完成：新增病例 ${result.imported} 例，新增明细 ${result.detailImported} 条，重复跳过 ${result.skipped} 例，冲突 ${result.conflicts + result.detailConflicts} 条`;
+    const summary = `导入完成：新增病例 ${result.imported} 例，病例副本 ${result.patientCopies} 例，新增明细 ${result.detailImported} 条，明细副本 ${result.detailCopies} 条，冲突跳过 ${result.conflictSkipped + result.detailConflictSkipped} 条`;
     clearPendingImport();
     toast(summary);
     render();
@@ -2373,49 +2493,71 @@ async function confirmPendingImport() {
 function clearPendingImport() {
   pendingImportPackage = null;
   pendingImportPreview = null;
+  pendingImportResolutions = {};
   pendingImportInProgress = false;
 }
 
 async function importPackage(pkg) {
   await verifyPackage(pkg);
+  const manifest = pkg.manifest || {};
   const files = pkg.files || {};
   const incomingPatients = parseCsvObjects(files["data/patient_master.csv"] || "");
   const relatedRows = parseImportRelatedRows(files);
   let imported = 0;
+  let patientCopies = 0;
   let skipped = 0;
   let conflicts = 0;
+  let conflictSkipped = 0;
   let detailImported = 0;
+  let detailCopies = 0;
   let detailConflicts = 0;
+  let detailConflictSkipped = 0;
   const importedIds = [];
+  const actions = [];
   incomingPatients.forEach((row) => {
     const status = classifyImportPatient(row, relatedRows);
     if (status.status === "conflict") {
       conflicts += 1;
+      const resolution = pendingImportResolutions[patientResolutionKey(row)] || "skip_patient";
+      const existing = findExistingImportPatient(row);
+      if (resolution === "import_patient_copy") {
+        const patient = hydrateImportedPatientCopy(row, relatedRows);
+        state.patients.push(patient);
+        importedIds.push(patient.patient_uid);
+        imported += 1;
+        patientCopies += 1;
+        actions.push(importAuditAction("patient", "import_patient_copy", row, status.reason, patientRef(existing), patientRef(row), patientRef(patient)));
+      } else {
+        conflictSkipped += 1;
+        actions.push(importAuditAction("patient", "skip_patient", row, status.reason, patientRef(existing), patientRef(row)));
+      }
       return;
     }
     if (status.status === "duplicate") {
       const existing = findExistingImportPatient(row);
-      const result = existing ? mergeRelatedRecords(existing, row, relatedRows) : { imported: 0, conflicts: 0 };
+      const result = existing ? mergeRelatedRecords(existing, row, relatedRows, actions) : { imported: 0, copied: 0, conflicts: 0, conflictSkipped: 0 };
       detailImported += result.imported;
+      detailCopies += result.copied;
       detailConflicts += result.conflicts;
-      if (result.imported && existing) touch(existing, false);
-      if (!result.imported) skipped += 1;
+      detailConflictSkipped += result.conflictSkipped;
+      if ((result.imported || result.copied) && existing) touch(existing, false);
+      if (!result.imported && !result.copied) {
+        skipped += 1;
+        if (!result.conflicts) actions.push(importAuditAction("patient", "skip_duplicate", row, "本机已有相同病例和明细，导入时跳过", patientRef(existing), patientRef(row)));
+      }
       return;
     }
-    const patient = hydrateImportedPatient(row, {
-      encounters: relatedRows.encounters.get(row.patient_uid) || [],
-      diagnoses: relatedRows.diagnoses.get(row.patient_uid) || [],
-      labs: relatedRows.labs.get(row.patient_uid) || [],
-      reports: relatedRows.reports.get(row.patient_uid) || [],
-      followups: relatedRows.followup.get(row.patient_uid) || []
-    });
+    const patient = hydrateImportedPatient(row, collectRelatedRowsForPatient(row, relatedRows));
     state.patients.push(patient);
     importedIds.push(patient.patient_uid);
     imported += 1;
+    actions.push(importAuditAction("patient", "import_patient", row, "本机未发现相同病例，导入为新增病例", patientRef(patient), patientRef(row), patientRef(patient)));
   });
   if (importedIds.length) state.activePatientId = importedIds[0];
+  const result = { imported, patientCopies, skipped, conflicts, conflictSkipped, detailImported, detailCopies, detailConflicts, detailConflictSkipped, importedIds, actions };
+  state.importAuditLog = [buildImportAudit(manifest, result, actions), ...state.importAuditLog].slice(0, 50);
   saveState();
-  return { imported, skipped, conflicts, detailImported, detailConflicts, importedIds };
+  return result;
 }
 
 function findExistingImportPatient(row) {
@@ -2426,7 +2568,123 @@ function findExistingImportPatient(row) {
   );
 }
 
-function mergeRelatedRecords(existingPatient, row, relatedRows) {
+function collectRelatedRowsForPatient(row, relatedRows) {
+  return {
+    encounters: relatedRows.encounters.get(row.patient_uid) || [],
+    diagnoses: relatedRows.diagnoses.get(row.patient_uid) || [],
+    labs: relatedRows.labs.get(row.patient_uid) || [],
+    reports: relatedRows.reports.get(row.patient_uid) || [],
+    followups: relatedRows.followup.get(row.patient_uid) || []
+  };
+}
+
+function hydrateImportedPatientCopy(row, relatedRows) {
+  const patientUid = uid("patient");
+  const copyRow = {
+    ...row,
+    patient_uid: patientUid,
+    record_uuid: uid("rec"),
+    content_hash: "",
+    research_id: uniqueResearchId(`${row.research_id || "IMPORTED"}_COPY`)
+  };
+  const related = Object.fromEntries(
+    importMergeDefinitions.map((definition) => [
+      definition.key === "followup" ? "followups" : definition.key,
+      (relatedRows[definition.key]?.get(row.patient_uid) || []).map((item) => cloneRelatedRow(item, definition, patientUid))
+    ])
+  );
+  return hydrateImportedPatient(copyRow, {
+    encounters: related.encounters || [],
+    diagnoses: related.diagnoses || [],
+    labs: related.labs || [],
+    reports: related.reports || [],
+    followups: related.followups || []
+  });
+}
+
+function hydrateRelatedRecordCopy(existingPatient, incomingRow, definition) {
+  return definition.hydrate(cloneRelatedRow(incomingRow, definition, existingPatient.patient_uid));
+}
+
+function cloneRelatedRow(row, definition, patientUid) {
+  const copy = {
+    ...row,
+    patient_uid: patientUid,
+    record_uuid: uid("rec"),
+    content_hash: ""
+  };
+  copy[definition.idField] = uid(idPrefixForField(definition.idField));
+  if (definition.key === "labs") copy.lab_report_id = uid("labreport");
+  return copy;
+}
+
+function idPrefixForField(field) {
+  return {
+    encounter_id: "enc",
+    diagnosis_id: "diag",
+    lab_result_id: "lab",
+    report_id: "report",
+    followup_id: "follow"
+  }[field] || "item";
+}
+
+function uniqueResearchId(base) {
+  const cleanBase = String(base || `PCC-${new Date().getFullYear()}-COPY`).replace(/\s+/g, "_");
+  let candidate = cleanBase;
+  let index = 1;
+  const existing = new Set(state.patients.map((patient) => patient.research_id));
+  while (existing.has(candidate)) {
+    candidate = `${cleanBase}${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function importAuditAction(scope, action, row, reason, localRef, incomingRef, resultRef = "") {
+  return {
+    scope,
+    action,
+    research_id: row.research_id || "",
+    reason,
+    local_ref: localRef || "",
+    incoming_ref: incomingRef || "",
+    result_ref: resultRef || ""
+  };
+}
+
+function buildImportAudit(manifest, result, actions) {
+  return {
+    audit_id: uid("audit"),
+    export_id: manifest.export_id || "未知",
+    source_device: manifest.source_device || "未知",
+    package_created_at: manifest.created_at || "",
+    processed_at: new Date().toISOString(),
+    summary: {
+      imported: result.imported,
+      patientCopies: result.patientCopies,
+      skipped: result.skipped,
+      conflicts: result.conflicts,
+      conflictSkipped: result.conflictSkipped,
+      detailImported: result.detailImported,
+      detailCopies: result.detailCopies,
+      detailConflicts: result.detailConflicts,
+      detailConflictSkipped: result.detailConflictSkipped
+    },
+    actions
+  };
+}
+
+function patientRef(row) {
+  if (!row) return "";
+  return row.record_uuid || row.patient_uid || row.research_id || "";
+}
+
+function detailRef(row, definition) {
+  if (!row) return "";
+  return row.record_uuid || row[definition.idField] || "";
+}
+
+function mergeRelatedRecords(existingPatient, row, relatedRows, actions = []) {
   return importMergeDefinitions.reduce(
     (summary, definition) => {
       const rows = relatedRows[definition.key]?.get(row.patient_uid) || [];
@@ -2434,16 +2692,29 @@ function mergeRelatedRecords(existingPatient, row, relatedRows) {
       rows.forEach((incomingRow) => {
         const status = classifyRelatedRecord(collection, incomingRow, definition);
         if (status === "new") {
-          collection.push(definition.hydrate(incomingRow));
+          const added = definition.hydrate(incomingRow);
+          collection.push(added);
           summary.imported += 1;
+          actions.push(importAuditAction(definition.key, "merge_detail_new", row, "重复病例自动合并新增明细", patientRef(existingPatient), detailRef(incomingRow, definition), detailRef(added, definition)));
         } else if (status === "conflict") {
           summary.conflicts += 1;
+          const resolution = pendingImportResolutions[detailResolutionKey(definition, incomingRow)] || "skip_detail";
+          const existingRecord = findMatchingRelatedRecord(collection, incomingRow, definition);
+          if (resolution === "import_detail_copy") {
+            const copied = hydrateRelatedRecordCopy(existingPatient, incomingRow, definition);
+            collection.push(copied);
+            summary.copied += 1;
+            actions.push(importAuditAction(definition.key, "import_detail_copy", row, "本机已有同ID明细，但字段内容不同", detailRef(existingRecord, definition), detailRef(incomingRow, definition), detailRef(copied, definition)));
+          } else {
+            summary.conflictSkipped += 1;
+            actions.push(importAuditAction(definition.key, "skip_detail", row, "本机已有同ID明细，但字段内容不同", detailRef(existingRecord, definition), detailRef(incomingRow, definition)));
+          }
         }
       });
       existingPatient[definition.key] = collection;
       return summary;
     },
-    { imported: 0, conflicts: 0 }
+    { imported: 0, copied: 0, conflicts: 0, conflictSkipped: 0 }
   );
 }
 
