@@ -46,6 +46,8 @@ const exportTemplates = [
   }
 ];
 
+const exportWorkbookSheetNames = ["患者主表", "住院次", "诊断明细", "化验长表", "报告明细", "随访记录", "字段字典"];
+
 let labScreenshotPreviewUrl = "";
 let labScreenshotOcrPayload = null;
 let pendingImportPackage = null;
@@ -2023,6 +2025,7 @@ function buildExportReport(patients, preview) {
     { label: "诊断筛选", value: diagnosisFilter },
     { label: "化验时间规则", value: state.exportConfig.labRule },
     { label: "字段选择", value: selectedFieldLabels },
+    { label: "XLSX工作簿", value: `${exportWorkbookSheetNames.length} 个Sheet：${exportWorkbookSheetNames.join("、")}` },
     { label: "导入审计次数", value: `${state.importAuditLog.length} 次` },
     { label: "最近导入审计", value: latestAudit ? `${formatDateTime(latestAudit.processed_at)} · ${formatImportAuditSummary(latestAudit.summary)}` : "无" }
   ];
@@ -2093,13 +2096,13 @@ function buildExportTables(patients) {
   const preview = buildPatientMasterPreview(patients);
   const patientMasterRows = [preview.columns, ...preview.rows];
   const workbookSheets = [
-    { name: "患者主表", rows: patientMasterRows },
-    { name: "住院次", rows: objectsToTableRows(encounterRows) },
-    { name: "诊断明细", rows: objectsToTableRows(diagnosisRows) },
-    { name: "化验长表", rows: objectsToTableRows(labRows) },
-    { name: "报告明细", rows: objectsToTableRows(reportRows) },
-    { name: "随访记录", rows: objectsToTableRows(followupRows) },
-    { name: "字段字典", rows: exportFieldCatalog.map((field) => [field.key, field.group, field.label, field.unit || "", field.dynamic ? "是" : "否"]) }
+    { name: exportWorkbookSheetNames[0], rows: patientMasterRows },
+    { name: exportWorkbookSheetNames[1], rows: objectsToTableRows(encounterRows) },
+    { name: exportWorkbookSheetNames[2], rows: objectsToTableRows(diagnosisRows) },
+    { name: exportWorkbookSheetNames[3], rows: objectsToTableRows(labRows) },
+    { name: exportWorkbookSheetNames[4], rows: objectsToTableRows(reportRows) },
+    { name: exportWorkbookSheetNames[5], rows: objectsToTableRows(followupRows) },
+    { name: exportWorkbookSheetNames[6], rows: exportFieldCatalog.map((field) => [field.key, field.group, field.label, field.unit || "", field.dynamic ? "是" : "否"]) }
   ];
   workbookSheets[6].rows.unshift(["字段", "分组", "显示名", "单位", "是否派生"]);
   return { patientRows, encounterRows, diagnosisRows, labRows, reportRows, followupRows, preview, patientMasterRows, workbookSheets };
