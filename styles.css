@@ -98,20 +98,7 @@ button {
 }
 
 .bottom-status {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 34px;
-  padding: 6px 14px;
-  border-top: 1px solid var(--line);
-  background: #fbfdfe;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.bottom-status strong {
-  color: var(--text);
+  display: none;
 }
 
 .status-pill,
@@ -494,26 +481,12 @@ button:disabled {
   margin-bottom: 10px;
 }
 
-.workflow-steps {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 8px 0 12px;
-}
-
-.workflow-steps span,
 .mode-help,
 .helper-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f6fbfe;
   color: var(--muted);
-}
-
-.workflow-steps span {
-  padding: 7px 10px;
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .mode-help {
