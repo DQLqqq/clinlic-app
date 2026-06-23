@@ -417,6 +417,39 @@ def rebuild_lab_table_text(rows: list[list[dict[str, Any]]], unboxed: list[str])
     return "\n".join(normalize_ocr_row(row) for row in text_rows if row.strip())
 
 
+def build_ocr_debug_payload(lines: list[dict[str, Any]], prefer_table: bool = False) -> dict[str, Any]:
+    boxed: list[dict[str, Any]] = []
+    unboxed = 0
+    for line in lines:
+        bounds = box_bounds(line.get("box") or [])
+        if not bounds:
+            unboxed += 1
+            continue
+        x1, y1, x2, y2 = bounds
+        boxed.append({**line, "x": x1, "x2": x2, "y": (y1 + y2) / 2, "height": max(1.0, y2 - y1)})
+    rows = group_boxed_rows(boxed) if boxed else []
+    header_index, anchors = detect_lab_table_columns(rows) if prefer_table else (-1, [])
+    columns = ordered_lab_columns(anchors) if header_index >= 0 else []
+    table_rows: list[list[str]] = []
+    if columns:
+        for row in rows[header_index + 1 :]:
+            values = assign_row_to_columns(row, columns)
+            if is_probable_lab_data_row(values):
+                table_rows.append([values.get(column["key"], "") for column in columns])
+            elif should_merge_table_continuation(values) and table_rows:
+                merge_table_continuation(table_rows[-1], values, columns)
+    return {
+        "line_count": len(lines),
+        "boxed_line_count": len(boxed),
+        "unboxed_line_count": unboxed,
+        "row_count": len(rows),
+        "table_detected": bool(columns),
+        "header_row_index": header_index,
+        "columns": [str(column["key"]) for column in columns],
+        "table_rows": table_rows[:20],
+    }
+
+
 def detect_lab_table_columns(rows: list[list[dict[str, Any]]]) -> tuple[int, list[dict[str, Any]]]:
     best_index = -1
     best_anchors: list[dict[str, Any]] = []
@@ -552,7 +585,8 @@ def build_response(payload: dict[str, Any], config: ServerConfig) -> dict[str, A
     lines: list[dict[str, Any]] = []
     collect_lines(raw_result, lines)
     lines = dedupe_lines(lines)
-    text = rebuild_text_from_lines(lines, prefer_table=payload.get("task") == "lab_table_ocr")
+    prefer_table = payload.get("task") == "lab_table_ocr"
+    text = rebuild_text_from_lines(lines, prefer_table=prefer_table)
     if not text.strip() and manual_text:
         text = manual_text
     elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -561,6 +595,7 @@ def build_response(payload: dict[str, Any], config: ServerConfig) -> dict[str, A
         "schema_version": SCHEMA_VERSION,
         "text": text,
         "lines": lines,
+        "debug": build_ocr_debug_payload(lines, prefer_table=prefer_table),
         "engine": "paddleocr-local",
         "provider": "PaddleOCR",
         "confidence": average_confidence(lines),
