@@ -28,6 +28,50 @@ OCR_MOCK_ALLOW_NULL_ORIGIN=1 node tools/local-ocr-mock-server.mjs
 
 完成调试后应关闭该开关。
 
+## PaddleOCR 本机服务
+
+正式离线识别优先使用本机 PaddleOCR 服务，接口仍然是同一个 `POST /ocr`：
+
+```bash
+python tools/paddle-ocr-server.py --host 127.0.0.1 --port 8766 --lang ch
+```
+
+如果当前仍从 `file:///.../index.html` 直接打开 HTML 原型，浏览器请求的 `Origin` 会是 `null`。需要临时允许 file 页面调用本机服务：
+
+```bash
+python tools/paddle-ocr-server.py --host 127.0.0.1 --port 8766 --lang ch --allow-file-origin
+```
+
+也可以用本机 HTTP 方式打开原型，避免 `Origin: null`：
+
+```bash
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+然后访问 `http://127.0.0.1:8765/index.html`。
+
+依赖安装由信息科或部署包完成。联网环境可用：
+
+```bash
+python -m pip install paddleocr paddlepaddle opencv-python pillow
+```
+
+离线临床电脑应提前准备 wheel 包，再从本机目录安装：
+
+```bash
+python -m pip install --no-index --find-links D:\wheelhouse paddleocr paddlepaddle opencv-python pillow
+```
+
+部署包还应预置 PaddleOCR 所需模型文件或缓存目录，并在断网状态下做一次截图识别 smoke test，避免首次运行时因缺少模型资源而失败。
+
+服务只绑定本机地址，限制请求大小，截图在内存中解码后交给 PaddleOCR，不保存图片文件，不记录完整 OCR 文本。识别结果只作为候选文本返回，仍需在 APP 中人工确认后才写入病例库。
+
+健康检查：
+
+```text
+http://127.0.0.1:8766/health
+```
+
 ## 请求
 
 ```json

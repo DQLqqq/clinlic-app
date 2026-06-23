@@ -3,3 +3,5 @@
 node_modules/
 output/
 assets/generated/
+__pycache__/
+*.pyc
