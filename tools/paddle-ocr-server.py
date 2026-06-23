@@ -19,6 +19,17 @@ from typing import Any
 SCHEMA_VERSION = "local-ocr-v1"
 TASK_NAMES = {"lab_table_ocr", "report_text_ocr"}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+LAB_TABLE_COLUMNS = [
+    {"key": "code", "aliases": ("编号", "缩写", "代码")},
+    {"key": "name", "aliases": ("项目名称", "项目", "名称")},
+    {"key": "result", "aliases": ("结果", "检验结果", "测定结果")},
+    {"key": "result_hint", "aliases": ("结果提示",)},
+    {"key": "flag", "aliases": ("异常提示", "异常")},
+    {"key": "diagnosis", "aliases": ("辅助诊断",)},
+    {"key": "unit", "aliases": ("单位",)},
+    {"key": "reference", "aliases": ("参考范围", "参考区间")},
+    {"key": "history", "aliases": ("历次", "历史")},
+]
 
 
 @dataclass
@@ -336,7 +347,7 @@ def box_bounds(box: list[list[float]]) -> tuple[float, float, float, float] | No
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def rebuild_text_from_lines(lines: list[dict[str, Any]]) -> str:
+def rebuild_text_from_lines(lines: list[dict[str, Any]], prefer_table: bool = False) -> str:
     boxed: list[dict[str, Any]] = []
     unboxed: list[str] = []
     for line in lines:
@@ -345,10 +356,25 @@ def rebuild_text_from_lines(lines: list[dict[str, Any]]) -> str:
             unboxed.append(line["text"])
             continue
         x1, y1, x2, y2 = bounds
-        boxed.append({**line, "x": x1, "y": (y1 + y2) / 2, "height": max(1.0, y2 - y1)})
+        boxed.append({**line, "x": x1, "x2": x2, "y": (y1 + y2) / 2, "height": max(1.0, y2 - y1)})
     if not boxed:
         return "\n".join(unboxed)
 
+    rows = group_boxed_rows(boxed)
+    if prefer_table:
+        table_text = rebuild_lab_table_text(rows, unboxed)
+        if table_text:
+            return table_text
+
+    text_rows = []
+    for row in sorted(rows, key=lambda value: sum(cell["y"] for cell in value) / len(value)):
+        cells = [normalize_ocr_cell(cell["text"]) for cell in sorted(row, key=lambda value: value["x"])]
+        text_rows.append("\t".join(cells))
+    text_rows.extend(unboxed)
+    return "\n".join(normalize_ocr_row(row) for row in text_rows if row.strip())
+
+
+def group_boxed_rows(boxed: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     heights = [item["height"] for item in boxed]
     row_threshold = max(14.0, median(heights) * 1.05)
     rows: list[list[dict[str, Any]]] = []
@@ -363,13 +389,129 @@ def rebuild_text_from_lines(lines: list[dict[str, Any]]) -> str:
             rows.append([item])
         else:
             matched.append(item)
+    return rows
 
-    text_rows = []
-    for row in sorted(rows, key=lambda value: sum(cell["y"] for cell in value) / len(value)):
-        cells = [normalize_ocr_cell(cell["text"]) for cell in sorted(row, key=lambda value: value["x"])]
-        text_rows.append("\t".join(cells))
+
+def rebuild_lab_table_text(rows: list[list[dict[str, Any]]], unboxed: list[str]) -> str:
+    header_index, anchors = detect_lab_table_columns(rows)
+    if header_index < 0 or len(anchors) < 3:
+        return ""
+
+    ordered_columns = ordered_lab_columns(anchors)
+    output_rows: list[list[str]] = []
+    for row in rows[header_index + 1 :]:
+        row_values = assign_row_to_columns(row, ordered_columns)
+        if not any(row_values.values()):
+            continue
+        if should_merge_table_continuation(row_values) and output_rows:
+            merge_table_continuation(output_rows[-1], row_values, ordered_columns)
+            continue
+        if not is_probable_lab_data_row(row_values):
+            continue
+        output_rows.append([row_values.get(column["key"], "") for column in ordered_columns])
+
+    if not output_rows:
+        return ""
+    text_rows = ["\t".join([normalize_ocr_cell(value) for value in row]).rstrip("\t") for row in output_rows]
     text_rows.extend(unboxed)
     return "\n".join(normalize_ocr_row(row) for row in text_rows if row.strip())
+
+
+def detect_lab_table_columns(rows: list[list[dict[str, Any]]]) -> tuple[int, list[dict[str, Any]]]:
+    best_index = -1
+    best_anchors: list[dict[str, Any]] = []
+    best_score = 0
+    for row_index, row in enumerate(rows):
+        anchors: list[dict[str, Any]] = []
+        used_keys: set[str] = set()
+        for cell in sorted(row, key=lambda value: value["x"]):
+            key = lab_column_key_for_text(str(cell.get("text") or ""))
+            if not key or key in used_keys:
+                continue
+            used_keys.add(key)
+            anchors.append({**cell, "key": key, "center": (cell["x"] + cell.get("x2", cell["x"])) / 2})
+        keys = {anchor["key"] for anchor in anchors}
+        score = len(keys)
+        if {"name", "result"}.issubset(keys):
+            score += 2
+        if "unit" in keys:
+            score += 1
+        if score > best_score:
+            best_index = row_index
+            best_anchors = anchors
+            best_score = score
+    keys = {anchor["key"] for anchor in best_anchors}
+    if not ({"name", "result"}.issubset(keys) and ("unit" in keys or "reference" in keys or "flag" in keys)):
+        return -1, []
+    return best_index, best_anchors
+
+
+def lab_column_key_for_text(text: str) -> str:
+    normalized = normalize_ocr_cell(text).replace(" ", "")
+    if not normalized:
+        return ""
+    best_key = ""
+    best_length = 0
+    for column in LAB_TABLE_COLUMNS:
+        for alias in column["aliases"]:
+            if alias in normalized and len(alias) > best_length:
+                best_key = str(column["key"])
+                best_length = len(alias)
+    return best_key
+
+
+def ordered_lab_columns(anchors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_key = {anchor["key"]: anchor for anchor in anchors}
+    ordered = []
+    for definition in LAB_TABLE_COLUMNS:
+        key = definition["key"]
+        if key not in by_key:
+            continue
+        anchor = by_key[key]
+        ordered.append({**definition, "x": anchor["center"]})
+    return sorted(ordered, key=lambda value: value["x"])
+
+
+def assign_row_to_columns(row: list[dict[str, Any]], columns: list[dict[str, Any]]) -> dict[str, str]:
+    values: dict[str, list[str]] = {str(column["key"]): [] for column in columns}
+    if not columns:
+        return {}
+    for cell in sorted(row, key=lambda value: value["x"]):
+        text = normalize_ocr_cell(cell.get("text") or "")
+        if not text:
+            continue
+        center = (cell["x"] + cell.get("x2", cell["x"])) / 2
+        column = nearest_column(center, columns)
+        values[str(column["key"])].append(text)
+    return {key: " ".join(items).strip() for key, items in values.items()}
+
+
+def nearest_column(center: float, columns: list[dict[str, Any]]) -> dict[str, Any]:
+    return min(columns, key=lambda column: abs(float(column["x"]) - center))
+
+
+def should_merge_table_continuation(values: dict[str, str]) -> bool:
+    has_result = bool(values.get("result"))
+    has_code = bool(values.get("code"))
+    has_unit = bool(values.get("unit"))
+    has_reference = bool(values.get("reference"))
+    return not (has_result or has_code or has_unit or has_reference)
+
+
+def merge_table_continuation(previous: list[str], values: dict[str, str], columns: list[dict[str, Any]]) -> None:
+    for index, column in enumerate(columns):
+        text = values.get(str(column["key"]), "")
+        if not text:
+            continue
+        previous[index] = f"{previous[index]} {text}".strip()
+
+
+def is_probable_lab_data_row(values: dict[str, str]) -> bool:
+    if not (values.get("result") or values.get("name") or values.get("code")):
+        return False
+    if values.get("result") and values.get("unit"):
+        return True
+    return bool(values.get("name") and values.get("result"))
 
 
 def normalize_ocr_cell(text: str) -> str:
@@ -410,7 +552,7 @@ def build_response(payload: dict[str, Any], config: ServerConfig) -> dict[str, A
     lines: list[dict[str, Any]] = []
     collect_lines(raw_result, lines)
     lines = dedupe_lines(lines)
-    text = rebuild_text_from_lines(lines)
+    text = rebuild_text_from_lines(lines, prefer_table=payload.get("task") == "lab_table_ocr")
     if not text.strip() and manual_text:
         text = manual_text
     elapsed_ms = int((time.perf_counter() - started) * 1000)
