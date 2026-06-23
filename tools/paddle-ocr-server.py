@@ -17,7 +17,7 @@ from typing import Any
 
 
 SCHEMA_VERSION = "local-ocr-v1"
-TASK_NAME = "lab_table_ocr"
+TASK_NAMES = {"lab_table_ocr", "report_text_ocr"}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
@@ -106,8 +106,8 @@ def validate_request(payload: dict[str, Any]) -> str:
         return "请求必须是 JSON 对象"
     if payload.get("schema_version") != SCHEMA_VERSION:
         return f"schema_version 必须是 {SCHEMA_VERSION}"
-    if payload.get("task") != TASK_NAME:
-        return f"仅支持 {TASK_NAME}"
+    if payload.get("task") not in TASK_NAMES:
+        return "仅支持 lab_table_ocr 或 report_text_ocr"
     privacy = payload.get("privacy") or {}
     if privacy.get("offline_only") is not True:
         return "缺少 offline_only 标记"

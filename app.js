@@ -66,6 +66,8 @@ const historyExportFields = [
 let labScreenshotPreviewUrl = "";
 let labScreenshotOcrPayload = null;
 let labScreenshotBatchPayloads = new Map();
+let reportOcrPreviewState = { patient_uid: "", url: "" };
+let reportOcrPayload = null;
 let pendingImportPackage = null;
 let pendingImportPreview = null;
 let pendingImportResolutions = {};
@@ -318,6 +320,7 @@ function loadState() {
       state.activeAiTab = parsed.activeAiTab || state.activeAiTab;
       if (!["capture", "candidates", "chat", "trace"].includes(state.activeAiTab)) state.activeAiTab = "capture";
       state.chat = parsed.chat || state.chat;
+      saveState();
       return;
     } catch {
       localStorage.removeItem(STORAGE_KEY);
@@ -351,11 +354,13 @@ function ensurePatientShape(patient) {
     patient.histories = historyTypes.slice(0, 6).map((type) => createHistory({ history_type: type }));
   }
   if (Array.isArray(patient.candidates)) {
-    patient.candidates = patient.candidates.filter((candidate) => !isScreenshotHistoryCandidate(candidate));
+    patient.candidates = normalizeCandidateList(patient.candidates.filter((candidate) => !isScreenshotHistoryCandidate(candidate)));
   }
+  if (Array.isArray(patient.labs)) patient.labs = normalizeLabRecords(patient.labs);
   if (!patient.ocr_workbench) patient.ocr_workbench = {};
   if (!Array.isArray(patient.ocr_workbench.capture_queue)) patient.ocr_workbench.capture_queue = [];
   patient.ocr_workbench.capture_queue = pruneStaleCaptureQueue(patient);
+  if (!patient.report_workbench) patient.report_workbench = {};
   return patient;
 }
 
@@ -366,16 +371,43 @@ function isScreenshotHistoryCandidate(candidate) {
 
 function pruneStaleCaptureQueue(patient) {
   const pendingCandidates = (patient.candidates || []).filter((candidate) => candidate.status !== "忽略");
-  return getCaptureQueue(patient.ocr_workbench).filter((item) => {
+  return dedupeCaptureQueue(getCaptureQueue(patient.ocr_workbench).filter((item) => {
     if (/^F12截屏_/.test(item.name || "")) return false;
     if (item.status === "已生成候选") return pendingCandidates.some((candidate) => candidateBelongsToCapture(candidate, item));
     return Boolean(item.ocr_text || labScreenshotBatchPayloads.has(item.capture_id));
-  });
+  }));
 }
 
 function candidateBelongsToCapture(candidate, item) {
   const name = item?.name || "";
   return Boolean(name && (`${candidate.source || ""} ${candidate.snippet || ""}`).includes(name));
+}
+
+function dedupeCaptureQueue(queue) {
+  const seen = new Set();
+  return (queue || []).filter((item) => {
+    const key = `${normalizeComparable(item.name)}|${item.size_bytes || item.size || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeLabRecords(labs) {
+  const seen = new Set();
+  return (labs || []).filter((lab) => {
+    if (isInvalidAutoLab(lab)) return false;
+    const key = labIdentity(lab);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function isInvalidAutoLab(lab) {
+  if (String(lab?.value_raw || "").trim()) return false;
+  const source = `${lab?.source_text || ""} ${lab?.source_doc || ""}`;
+  return /OCR|截图|微信图片|\.png|\.jpg|\.jpeg/i.test(source);
 }
 
 function render() {
@@ -707,6 +739,16 @@ function renderLabScreenshotImport(patient) {
             </select>
           </div>
           <div class="mode-help">${escapeHtml(getOcrModeHelp(cfg.mode))}</div>
+          <div class="ocr-controls">
+            <div class="field">
+              <label>本批检查日期</label>
+              <input data-ocr-workbench="batch_date" type="date" value="${escapeAttr(workbench.batch_date || "")}" />
+            </div>
+            <div class="field">
+              <label>日期看不清时</label>
+              <button class="secondary" data-action="apply-ocr-batch-date" type="button">应用到待导入</button>
+            </div>
+          </div>
           <details class="advanced-box">
             <summary>高级设置</summary>
             <div class="ocr-controls">
@@ -752,15 +794,17 @@ function renderCaptureQueue(workbench) {
     <div class="capture-queue">
       <div class="table-tools">
         <strong>待处理截图队列</strong>
+        <button class="mini-btn warn" data-action="clear-capture-queue" type="button">清空队列</button>
       </div>
       <table class="data-table compact-table">
-        <thead><tr><th>截图</th><th>状态</th><th>候选</th><th>时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>截图</th><th>状态</th><th>候选</th><th>检查日期</th><th>加入时间</th><th>操作</th></tr></thead>
         <tbody>
           ${queue.map((item) => `
             <tr data-capture-id="${escapeAttr(item.capture_id)}">
               <td>${escapeHtml(item.name)}</td>
               <td><span class="badge ${item.status === "已生成候选" ? "good" : "warn"}">${escapeHtml(item.status)}</span></td>
               <td>${escapeHtml(String(item.candidate_count || 0))}</td>
+              <td>${escapeHtml(item.batch_date || workbench.batch_date || "未填")}</td>
               <td>${escapeHtml(formatDateTime(item.created_at))}</td>
               <td>
                 <button class="mini-btn" data-action="run-capture-item-ocr" type="button">识别</button>
@@ -792,6 +836,7 @@ function labRow(lab) {
 
 function renderReports(patient) {
   return `
+    ${renderReportImageImport(patient)}
     <section class="section-card full">
       <h3>报告文本 <button class="mini-btn" type="button" data-action="add-report">新增报告</button></h3>
       <p class="badge">仅保存报告文字/结构化摘要，不保存影像、DICOM、病理切片或大截图</p>
@@ -809,6 +854,50 @@ function renderReports(patient) {
       <div class="inline-row" style="margin-top:10px">
         <button class="secondary" type="button" data-action="extract-candidates">生成候选字段</button>
         <span class="badge">候选需人工确认后才入库</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderReportImageImport(patient) {
+  const workbench = getReportOcrWorkbench(patient);
+  const cfg = state.ocrConfig;
+  return `
+    <section class="section-card full">
+      <h3>报告图片导入 <span class="badge">图片不入库</span></h3>
+      <div class="ocr-grid">
+        <div class="upload-box">
+          <label class="upload-zone">
+            <input data-report-image-input type="file" accept="image/*" />
+            <strong>选择 PACS/HIS 报告图片</strong>
+            <span>${workbench.image_name ? escapeHtml(workbench.image_name) : "只识别报告文字，确认后保存文字和摘要"}</span>
+          </label>
+          ${getReportPreviewUrl(patient) ? `<img class="ocr-preview" src="${escapeAttr(getReportPreviewUrl(patient))}" alt="报告图片预览" />` : `<div class="ocr-placeholder">报告图片预览</div>`}
+        </div>
+        <div class="ocr-work">
+          <div class="ocr-controls">
+            <div class="field">
+              <label>报告日期</label>
+              <input data-report-workbench="report_date" type="date" value="${escapeAttr(workbench.report_date || "")}" />
+            </div>
+            <div class="field">
+              <label>识别方式</label>
+              <select data-ocr-config="mode">
+                ${ocrEngineModes.map((mode) => `<option value="${escapeAttr(mode.key)}" ${cfg.mode === mode.key ? "selected" : ""}>${escapeHtml(mode.label)}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div class="mode-help">${escapeHtml(getOcrModeHelp(cfg.mode))}</div>
+          <div class="field">
+            <label>报告OCR文字</label>
+            <textarea data-report-ocr-text placeholder="可粘贴报告OCR文字；也可以选择图片后运行本机OCR。">${escapeHtml(workbench.ocr_text || "")}</textarea>
+          </div>
+          <div class="inline-row" style="margin-top:10px">
+            <button class="secondary" data-action="run-report-ocr" type="button">识别报告图片</button>
+            <button class="primary" data-action="apply-report-ocr" type="button">确认写入报告</button>
+            <span class="badge ${workbench.last_status === "通过" ? "good" : "warn"}">${escapeHtml(workbench.last_status || "待识别")}</span>
+          </div>
+        </div>
       </div>
     </section>
   `;
@@ -1268,6 +1357,7 @@ function bindActiveTabEvents(patient) {
   }
 
   bindOcrEvents(patient);
+  bindReportOcrEvents(patient);
   bindReviewModalEvents(patient);
 
   document.querySelectorAll("[data-export-patient]").forEach((input) => {
@@ -1463,6 +1553,14 @@ async function handleAction(action, button) {
     render();
     return;
   }
+  if (action === "apply-ocr-batch-date") {
+    const date = getOcrWorkbench(patient).batch_date || "";
+    const count = applyBatchDateToLabCandidates(patient, date);
+    touch(patient);
+    render();
+    toast(date ? `已把 ${date} 应用到 ${count} 条待导入化验` : "请先填写本批检查日期");
+    return;
+  }
   if (action === "run-workbench-ocr") {
     try {
       const count = await runWorkbenchOcrForPatient(patient);
@@ -1496,9 +1594,24 @@ async function handleAction(action, button) {
     toast("已移除待处理截图");
     return;
   }
+  if (action === "clear-capture-queue") {
+    clearCaptureQueue(patient);
+    render();
+    toast("已清空待处理截图队列");
+    return;
+  }
   if (action === "open-review-modal") {
     reviewModalOpen = true;
     renderReviewModal();
+    return;
+  }
+  if (action === "apply-review-batch-date") {
+    const date = document.getElementById("reviewBatchDate")?.value || "";
+    const count = applyBatchDateToLabCandidates(patient, date);
+    reviewModalOpen = true;
+    touch(patient);
+    render();
+    toast(date ? `已统一修改 ${count} 条化验检查日期` : "请先填写本批检查日期");
     return;
   }
   if (action === "add-review-lab") {
@@ -1555,6 +1668,22 @@ async function handleAction(action, button) {
   }
   if (action === "download-export-report") {
     downloadExportReport();
+    return;
+  }
+  if (action === "run-report-ocr") {
+    try {
+      const text = await runReportOcrForPatient(patient);
+      toast(text ? "报告图片已识别，请确认后写入报告" : "未识别到报告文字");
+    } catch (error) {
+      toast(`报告OCR失败：${error.message}`);
+    }
+    render();
+    return;
+  }
+  if (action === "apply-report-ocr") {
+    const created = applyReportOcrToPatient(patient);
+    render();
+    toast(created ? "报告文字已写入报告表" : "请先识别或粘贴报告文字");
     return;
   }
   if (action === "confirm-import-package") {
@@ -1721,6 +1850,7 @@ function renderReviewModal() {
     root.innerHTML = "";
     return;
   }
+  const reviewBatchDate = getReviewBatchDate(patient, candidates);
   root.innerHTML = `
     <div class="modal-backdrop" data-action="close-review-modal">
       <section class="review-modal" role="dialog" aria-modal="true" aria-label="待导入数据表格" data-modal-panel>
@@ -1734,6 +1864,11 @@ function renderReviewModal() {
         <div class="inline-row modal-actions">
           <button class="secondary" data-action="add-review-lab" type="button">手动加化验</button>
           <button class="secondary" data-action="add-review-history" type="button">手动加病史</button>
+          <label class="batch-date-control">
+            <span>本批检查日期</span>
+            <input id="reviewBatchDate" type="date" value="${escapeAttr(reviewBatchDate)}" />
+          </label>
+          <button class="secondary" data-action="apply-review-batch-date" type="button">应用到本批化验</button>
           <button class="primary" data-action="confirm-all-review-candidates" type="button" ${candidates.length ? "" : "disabled"}>确认全部入库</button>
           <span class="badge">${candidates.length} 条待确认</span>
         </div>
@@ -1742,6 +1877,14 @@ function renderReviewModal() {
     </div>
   `;
   bindReviewModalEvents(patient);
+}
+
+function getReviewBatchDate(patient, candidates) {
+  const labDates = candidates
+    .filter((candidate) => candidate.field?.startsWith("lab:"))
+    .map((candidate) => candidate.payload?.specimen_time || candidate.payload?.report_time || "")
+    .filter(Boolean);
+  return labDates[0] || getOcrWorkbench(patient).batch_date || "";
 }
 
 function renderReviewCandidateTable(candidates) {
@@ -1942,12 +2085,28 @@ function bindOcrEvents(patient) {
     });
   });
 
+  document.querySelectorAll("[data-ocr-workbench]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const workbench = getOcrWorkbench(patient);
+      workbench[input.dataset.ocrWorkbench] = input.value;
+      if (input.dataset.ocrWorkbench === "batch_date") {
+        getCaptureQueue(workbench).forEach((item) => {
+          if (!item.batch_date || item.status !== "已生成候选") item.batch_date = input.value;
+        });
+      }
+      touch(patient, false);
+    });
+  });
+
   document.querySelectorAll("[data-ocr-config]").forEach((input) => {
     const updateOcrConfig = () => {
       const key = input.dataset.ocrConfig;
       state.ocrConfig[key] = key === "timeoutMs" ? normalizeOcrTimeout(input.value) : input.value;
       saveState();
-      if (key === "mode") renderAiContent();
+      if (key === "mode") {
+        renderActiveTab();
+        renderAiContent();
+      }
     };
     input.addEventListener("input", () => {
       updateOcrConfig();
@@ -1955,6 +2114,26 @@ function bindOcrEvents(patient) {
     input.addEventListener("change", () => {
       if (input.dataset.ocrConfig === "timeoutMs") input.value = normalizeOcrTimeout(input.value);
       if (input.tagName === "SELECT") updateOcrConfig();
+    });
+  });
+}
+
+function bindReportOcrEvents(patient) {
+  document.querySelectorAll("[data-report-image-input]").forEach((input) => {
+    input.addEventListener("change", () => handleReportImageFile(input.files?.[0], patient));
+  });
+  document.querySelectorAll("[data-report-ocr-text]").forEach((textarea) => {
+    textarea.addEventListener("input", () => {
+      const workbench = getReportOcrWorkbench(patient);
+      workbench.ocr_text = textarea.value;
+      touch(patient, false);
+    });
+  });
+  document.querySelectorAll("[data-report-workbench]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const workbench = getReportOcrWorkbench(patient);
+      workbench[input.dataset.reportWorkbench] = input.value;
+      touch(patient, false);
     });
   });
 }
@@ -2000,14 +2179,51 @@ function getQcIssues(patient) {
 }
 
 function getCandidates(patient) {
-  return (patient.candidates || []).filter((item) => item.status !== "忽略");
+  return normalizeCandidateList(patient.candidates || []).filter((item) => item.status !== "忽略");
 }
 
 function mergeCandidates(existing, incoming, removePredicate) {
-  return [
+  return normalizeCandidateList([
     ...(existing || []).filter((item) => !removePredicate(item)),
     ...incoming
-  ];
+  ]);
+}
+
+function normalizeCandidateList(candidates) {
+  const seen = new Set();
+  return (candidates || []).filter((candidate) => {
+    if (candidate.status !== "忽略" && !isImportableCandidate(candidate)) return false;
+    const key = candidateIdentity(candidate);
+    if (candidate.status !== "忽略" && seen.has(key)) return false;
+    if (candidate.status !== "忽略") seen.add(key);
+    return true;
+  });
+}
+
+function isImportableCandidate(candidate) {
+  if (!candidate?.field?.startsWith("lab:")) return true;
+  if (candidate.source === "人工新增") return true;
+  const name = candidate.payload?.item_name_raw || candidate.label || "";
+  const value = candidate.value || candidate.payload?.value_raw || "";
+  return Boolean(String(name).trim() && String(value).trim());
+}
+
+function candidateIdentity(candidate) {
+  if (candidate?.field?.startsWith("lab:")) {
+    const time = candidate.payload?.specimen_time || candidate.payload?.report_time || "";
+    return [
+      "lab",
+      normalizeComparable(candidate.payload?.item_name_raw || candidate.label),
+      normalizeComparable(candidate.value || candidate.payload?.value_raw),
+      normalizeComparable(candidate.payload?.unit_raw),
+      normalizeComparable(time)
+    ].join("|");
+  }
+  return [
+    normalizeComparable(candidate.field),
+    normalizeComparable(candidate.value),
+    normalizeComparable(candidate.source)
+  ].join("|");
 }
 
 function extractCandidates(text) {
@@ -2145,9 +2361,32 @@ function updateReviewCandidateFromRow(patient, row) {
   }
 }
 
-function extractLabCandidatesFromText(text, sourceName) {
-  const sourceDate = extractLabReportDate(text);
-  return text
+function applyBatchDateToLabCandidates(patient, date) {
+  const normalizedDate = normalizeDate(date);
+  if (!normalizedDate) return 0;
+  const workbench = getOcrWorkbench(patient);
+  workbench.batch_date = normalizedDate;
+  getCaptureQueue(workbench).forEach((item) => {
+    item.batch_date = normalizedDate;
+  });
+  let count = 0;
+  (patient.candidates || []).forEach((candidate) => {
+    if (!candidate.field?.startsWith("lab:") || candidate.status === "忽略") return;
+    candidate.payload = {
+      ...(candidate.payload || {}),
+      specimen_time: normalizedDate,
+      report_time: normalizedDate,
+      date_source: "人工指定"
+    };
+    count += 1;
+  });
+  patient.candidates = normalizeCandidateList(patient.candidates || []);
+  return count;
+}
+
+function extractLabCandidatesFromText(text, sourceName, batchDate = "") {
+  const sourceDate = normalizeDate(batchDate) || extractLabReportDate(text);
+  const candidates = text
     .split(/\r?\n/)
     .map(parseLabOcrLine)
     .filter(Boolean)
@@ -2172,6 +2411,7 @@ function extractLabCandidatesFromText(text, sourceName) {
         source_text: `${sourceName}: ${lab.raw}`
       }
     }));
+  return normalizeCandidateList(candidates);
 }
 
 function extractLabReportDate(text) {
@@ -2259,12 +2499,27 @@ function getOcrWorkbench(patient) {
       image_size: "",
       ocr_text: "",
       parsed_at: "",
+      batch_date: "",
       source_type: "化验截图",
       capture_queue: []
     };
   }
   if (!Array.isArray(patient.ocr_workbench.capture_queue)) patient.ocr_workbench.capture_queue = [];
+  if (typeof patient.ocr_workbench.batch_date !== "string") patient.ocr_workbench.batch_date = "";
   return patient.ocr_workbench;
+}
+
+function getReportOcrWorkbench(patient) {
+  if (!patient.report_workbench) patient.report_workbench = {};
+  patient.report_workbench = {
+    image_name: patient.report_workbench.image_name || "",
+    image_size: patient.report_workbench.image_size || "",
+    ocr_text: patient.report_workbench.ocr_text || "",
+    report_date: patient.report_workbench.report_date || "",
+    last_status: patient.report_workbench.last_status || "待识别",
+    ocr_engine: patient.report_workbench.ocr_engine || ""
+  };
+  return patient.report_workbench;
 }
 
 function getCaptureQueue(workbench) {
@@ -2297,13 +2552,33 @@ async function handleLabScreenshotFiles(files, patient) {
 
 function enqueueCapturePayload(patient, payload) {
   const workbench = getOcrWorkbench(patient);
+  const sizeBytes = Number(payload.size) || 0;
+  const existing = getCaptureQueue(workbench).find((item) => {
+    if (normalizeComparable(item.name) !== normalizeComparable(payload.name)) return false;
+    if (item.size_bytes || sizeBytes) return Number(item.size_bytes || 0) === sizeBytes;
+    return true;
+  });
+  if (existing) {
+    existing.status = "待识别";
+    existing.candidate_count = 0;
+    existing.ocr_text = payload.ocr_text || "";
+    existing.created_at = new Date().toISOString();
+    existing.batch_date = workbench.batch_date || existing.batch_date || "";
+    if (sizeBytes) existing.size_bytes = sizeBytes;
+    if (payload.type) existing.type = payload.type;
+    if (payload.dataUrl) labScreenshotBatchPayloads.set(existing.capture_id, { ...payload, dataUrl: payload.dataUrl });
+    workbench.capture_queue = dedupeCaptureQueue(getCaptureQueue(workbench));
+    return existing;
+  }
   const captureId = uid("capture");
   const item = {
     capture_id: captureId,
     name: payload.name || `截图_${getCaptureQueue(workbench).length + 1}`,
     size: payload.size ? `${Math.max(1, Math.round(payload.size / 1024))}KB` : "",
+    size_bytes: sizeBytes,
     type: payload.type || "image/png",
     created_at: new Date().toISOString(),
+    batch_date: workbench.batch_date || "",
     status: "待识别",
     candidate_count: 0,
     ocr_text: payload.ocr_text || ""
@@ -2342,6 +2617,15 @@ function removeCaptureQueueItem(patient, captureId) {
   const workbench = getOcrWorkbench(patient);
   workbench.capture_queue = getCaptureQueue(workbench).filter((item) => item.capture_id !== captureId);
   labScreenshotBatchPayloads.delete(captureId);
+  touch(patient);
+}
+
+function clearCaptureQueue(patient) {
+  const workbench = getOcrWorkbench(patient);
+  getCaptureQueue(workbench).forEach((item) => labScreenshotBatchPayloads.delete(item.capture_id));
+  workbench.capture_queue = [];
+  labScreenshotPreviewUrl = "";
+  labScreenshotOcrPayload = null;
   touch(patient);
 }
 
@@ -2396,7 +2680,7 @@ async function runCaptureQueueItem(patient, captureId, options = {}) {
     workbench.image_name = item.name;
     workbench.ocr_engine = response.engine || state.ocrConfig.lastEngine || "本机OCR";
     state.ocrConfig.lastStatus = "通过";
-    const candidates = extractLabCandidatesFromText(item.ocr_text, item.name);
+    const candidates = extractLabCandidatesFromText(item.ocr_text, item.name, item.batch_date || workbench.batch_date || "");
     item.candidate_count = candidates.length;
     item.status = candidates.length ? "已生成候选" : "未识别到表格";
     patient.candidates = mergeCandidates(patient.candidates || [], candidates, (candidate) => candidate.source === `化验截图OCR · ${item.name}` || candidate.source === item.name);
@@ -2441,7 +2725,7 @@ function buildOcrRequest(patient, workbench, imagePayload = labScreenshotOcrPayl
     schema_version: OCR_SCHEMA_VERSION,
     app_schema_version: "v3",
     created_at: new Date().toISOString(),
-    task: "lab_table_ocr",
+    task: workbench.ocr_task || "lab_table_ocr",
     image: imagePayload
       ? {
         name: imagePayload.name,
@@ -2594,7 +2878,7 @@ function runLabOcrForPatient(patient) {
   const workbench = getOcrWorkbench(patient);
   if (!workbench.ocr_text.trim()) return 0;
   const sourceName = workbench.image_name || "OCR文本";
-  const candidates = extractLabCandidatesFromText(workbench.ocr_text, sourceName);
+  const candidates = extractLabCandidatesFromText(workbench.ocr_text, sourceName, workbench.batch_date || "");
   patient.candidates = mergeCandidates(
     patient.candidates || [],
     candidates,
@@ -2613,6 +2897,97 @@ function readFileAsDataUrl(file) {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+async function handleReportImageFile(file, patient) {
+  if (!file) return;
+  const dataUrl = await readFileAsDataUrl(file);
+  const workbench = getReportOcrWorkbench(patient);
+  workbench.image_name = file.name;
+  workbench.image_size = `${Math.max(1, Math.round(file.size / 1024))}KB`;
+  workbench.last_status = "待识别";
+  reportOcrPreviewState = { patient_uid: patient.patient_uid, url: dataUrl };
+  reportOcrPayload = { patient_uid: patient.patient_uid, name: file.name, size: file.size, type: file.type || "application/octet-stream", dataUrl };
+  touch(patient);
+  render();
+  toast("报告图片已载入，图片不会入库");
+}
+
+function getReportPreviewUrl(patient) {
+  return reportOcrPreviewState.patient_uid === patient.patient_uid ? reportOcrPreviewState.url : "";
+}
+
+function getReportOcrPayload(patient) {
+  if (!reportOcrPayload || reportOcrPayload.patient_uid !== patient.patient_uid) return null;
+  return reportOcrPayload;
+}
+
+async function runReportOcrForPatient(patient) {
+  const workbench = getReportOcrWorkbench(patient);
+  const payload = getReportOcrPayload(patient);
+  const requestWorkbench = {
+    ...workbench,
+    image_name: workbench.image_name || payload?.name || "",
+    ocr_task: "report_text_ocr"
+  };
+  if (!requestWorkbench.ocr_text && !payload) throw new Error("请先选择报告图片或粘贴报告OCR文字");
+  const response = await requestOcrText(buildOcrRequest(patient, requestWorkbench, payload));
+  workbench.ocr_text = response.text || workbench.ocr_text;
+  workbench.ocr_engine = response.engine || state.ocrConfig.lastEngine || "本机OCR";
+  workbench.last_status = "通过";
+  touch(patient);
+  return workbench.ocr_text;
+}
+
+function applyReportOcrToPatient(patient) {
+  const workbench = getReportOcrWorkbench(patient);
+  const text = String(workbench.ocr_text || "").trim();
+  if (!text) return false;
+  const draft = parseReportOcrText(text, workbench);
+  patient.reports.push(createReport(draft));
+  patient.report_scratch = text;
+  workbench.ocr_text = "";
+  workbench.image_name = "";
+  workbench.image_size = "";
+  workbench.last_status = "已写入报告";
+  if (reportOcrPreviewState.patient_uid === patient.patient_uid) reportOcrPreviewState = { patient_uid: "", url: "" };
+  if (reportOcrPayload?.patient_uid === patient.patient_uid) reportOcrPayload = null;
+  touch(patient);
+  return true;
+}
+
+function parseReportOcrText(text, workbench = {}) {
+  const reportDate = normalizeDate(workbench.report_date) || extractReportDate(text);
+  const title = extractReportTitle(text);
+  const sourceRef = matchText(text, /(?:报告号|报告编号|检查号|登记号)[:：\s]*([A-Za-z0-9-]+)/) || "";
+  return {
+    report_type: /病理|免疫组化|活检/.test(text) ? "病理报告" : "影像报告",
+    report_date: reportDate,
+    report_title: title,
+    report_text_raw: text,
+    report_text_hash: simpleHash(text),
+    structured_summary: extractReportSummary(text),
+    source_system: /CT|MR|MRI|超声|影像|PACS/.test(text) ? "PACS" : "HIS",
+    source_ref: sourceRef,
+    store_image_flag: "否",
+    confirm_status: "人工确认"
+  };
+}
+
+function extractReportDate(text) {
+  const explicit = matchText(text, /(?:报告日期|报告时间|检查日期|检查时间|申请日期|申请时间)[:：\s]*(20\d{2}[-/年]\d{1,2}[-/月]\d{1,2})/);
+  return normalizeDate(explicit || matchText(text, /(20\d{2}[-/年]\d{1,2}[-/月]\d{1,2})/));
+}
+
+function extractReportTitle(text) {
+  return matchText(text, /(?:检查项目|报告名称|项目名称)[:：\s]*([^\n\r。；;]+)/) || (/CT|增强CT/.test(text) ? "CT报告" : "报告OCR导入");
+}
+
+function extractReportSummary(text) {
+  const conclusion = matchText(text, /(?:检查结论|诊断意见|影像诊断|病理诊断)[:：\s]*([\s\S]{1,260})/);
+  if (conclusion) return conclusion.trim();
+  const finding = matchText(text, /(?:检查所见|报告内容|镜下所见)[:：\s]*([\s\S]{1,260})/);
+  return (finding || text.slice(0, 260)).trim();
 }
 
 async function handleModelFile(file) {
@@ -2647,6 +3022,7 @@ function applyCandidate(patient, candidate) {
   } else if (candidate.field.startsWith("lab:")) {
     const [, itemName, unit] = candidate.field.split(":");
     const lab = createLab({ item_name_raw: itemName, value_raw: candidate.value, unit_raw: unit, source_text: candidate.snippet, ...(candidate.payload || {}) });
+    if (!isValidLabRecord(lab)) return;
     if (!hasEquivalentLab(patient, lab)) patient.labs.push(lab);
   } else if (candidate.field.startsWith("history:")) {
     ensurePatientShape(patient);
@@ -2675,9 +3051,16 @@ function labIdentity(lab) {
     normalizeComparable(lab.item_name_raw),
     normalizeComparable(lab.value_raw),
     normalizeComparable(lab.unit_raw),
-    normalizeComparable(lab.specimen_time || lab.report_time),
-    normalizeComparable(lab.source_text)
+    normalizeComparable(lab.specimen_time || lab.report_time)
   ].join("|");
+}
+
+function isValidLabRecord(lab) {
+  return Boolean(
+    String(lab?.item_name_raw || "").trim() &&
+    String(lab?.value_raw || "").trim() &&
+    String(lab?.unit_raw || "").trim()
+  );
 }
 
 function normalizeComparable(value) {
@@ -4011,7 +4394,16 @@ function createPatient() {
       image_size: "",
       ocr_text: "",
       parsed_at: "",
+      batch_date: "",
       source_type: "化验截图"
+    },
+    report_workbench: {
+      image_name: "",
+      image_size: "",
+      ocr_text: "",
+      report_date: "",
+      last_status: "待识别",
+      ocr_engine: ""
     },
     report_scratch: "",
     updated_at: new Date().toISOString()

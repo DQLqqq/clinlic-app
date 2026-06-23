@@ -6,6 +6,7 @@ import { Buffer } from "node:buffer";
 const port = Number(process.env.OCR_MOCK_PORT || process.argv[2] || 8766);
 const host = normalizeBindHost(process.env.OCR_MOCK_HOST || "127.0.0.1");
 const schema = "local-ocr-v1";
+const tasks = new Set(["lab_table_ocr", "report_text_ocr"]);
 const maxBodyBytes = 12 * 1024 * 1024;
 const allowNullOrigin = process.env.OCR_MOCK_ALLOW_NULL_ORIGIN === "1";
 
@@ -79,7 +80,7 @@ function readBody(req) {
 function validateRequest(payload) {
   if (!payload || typeof payload !== "object") return "请求必须是 JSON 对象";
   if (payload.schema_version !== schema) return `schema_version 必须是 ${schema}`;
-  if (payload.task !== "lab_table_ocr") return "仅支持 lab_table_ocr";
+  if (!tasks.has(payload.task)) return "仅支持 lab_table_ocr 或 report_text_ocr";
   if (!payload.privacy?.offline_only || !payload.privacy?.human_confirm_required) return "缺少离线和人工确认标记";
   if (payload.privacy?.store_image !== false) return "privacy.store_image 必须为 false";
   if (payload.image && payload.image.retain_image !== false) return "image.retain_image 必须为 false";
