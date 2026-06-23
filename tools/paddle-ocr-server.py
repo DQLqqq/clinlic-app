@@ -284,18 +284,24 @@ def add_line(lines: list[dict[str, Any]], text: Any, confidence: Any = None, box
 def collect_lines(node: Any, lines: list[dict[str, Any]]) -> None:
     plain = to_plain(node)
     if isinstance(plain, dict):
+        consumed_keys: set[str] = set()
         rec_texts = plain.get("rec_texts")
         if isinstance(rec_texts, list):
+            consumed_keys.add("rec_texts")
             scores = plain.get("rec_scores") or plain.get("scores") or []
             boxes = plain.get("rec_polys") or plain.get("dt_polys") or plain.get("boxes") or []
+            consumed_keys.update({"rec_scores", "scores", "rec_polys", "dt_polys", "boxes"})
             for index, text in enumerate(rec_texts):
                 add_line(lines, text, scores[index] if index < len(scores) else None, boxes[index] if index < len(boxes) else None)
         text = plain.get("text") or plain.get("rec_text") or plain.get("transcription") or plain.get("label")
         if text:
+            consumed_keys.update({"text", "rec_text", "transcription", "label", "score", "rec_score", "confidence", "box", "points", "poly"})
             score = plain.get("score") or plain.get("rec_score") or plain.get("confidence")
             box = plain.get("box") or plain.get("points") or plain.get("poly")
             add_line(lines, text, score, box)
-        for value in plain.values():
+        for key, value in plain.items():
+            if key in consumed_keys:
+                continue
             collect_lines(value, lines)
         return
     if isinstance(plain, list):
@@ -344,7 +350,7 @@ def rebuild_text_from_lines(lines: list[dict[str, Any]]) -> str:
         return "\n".join(unboxed)
 
     heights = [item["height"] for item in boxed]
-    row_threshold = max(10.0, median(heights) * 0.7)
+    row_threshold = max(14.0, median(heights) * 1.05)
     rows: list[list[dict[str, Any]]] = []
     for item in sorted(boxed, key=lambda value: (value["y"], value["x"])):
         matched = None
@@ -359,11 +365,22 @@ def rebuild_text_from_lines(lines: list[dict[str, Any]]) -> str:
             matched.append(item)
 
     text_rows = []
-    for row in rows:
-        cells = [cell["text"] for cell in sorted(row, key=lambda value: value["x"])]
+    for row in sorted(rows, key=lambda value: sum(cell["y"] for cell in value) / len(value)):
+        cells = [normalize_ocr_cell(cell["text"]) for cell in sorted(row, key=lambda value: value["x"])]
         text_rows.append("\t".join(cells))
     text_rows.extend(unboxed)
-    return "\n".join(row for row in text_rows if row.strip())
+    return "\n".join(normalize_ocr_row(row) for row in text_rows if row.strip())
+
+
+def normalize_ocr_cell(text: str) -> str:
+    return " ".join(str(text or "").replace("\r", " ").replace("\n", " ").split())
+
+
+def normalize_ocr_row(text: str) -> str:
+    row = str(text or "").replace("μ", "μ").replace("µ", "μ")
+    row = row.replace("／", "/").replace("10~", "10^")
+    row = row.replace("×10^", "10^").replace("x10^", "10^")
+    return row.strip()
 
 
 def average_confidence(lines: list[dict[str, Any]]) -> float | None:

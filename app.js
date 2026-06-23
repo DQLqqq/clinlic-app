@@ -224,8 +224,27 @@ const labItemDictionary = [
   { aliases: ["PLT", "血小板"], name: "血小板", unit: "10^9/L" },
   { aliases: ["CA19-9", "CA199", "糖类抗原19-9"], name: "CA19-9", unit: "U/mL" },
   { aliases: ["CEA", "癌胚抗原"], name: "CEA", unit: "ng/mL" },
+  { aliases: ["ALT", "丙氨酸氨基转移酶"], name: "丙氨酸氨基转移酶", unit: "U/L" },
+  { aliases: ["AST", "天门冬氨酸氨基转移酶", "天冬氨酸氨基转移酶"], name: "天门冬氨酸氨基转移酶", unit: "U/L" },
+  { aliases: ["AST/ALT"], name: "AST/ALT", unit: "" },
+  { aliases: ["ALP", "碱性磷酸酶"], name: "碱性磷酸酶", unit: "U/L" },
+  { aliases: ["γ-GT", "γGT", "GGT", "r-GT", "γ-谷氨酰基转移酶", "谷氨酰基转移酶"], name: "γ-谷氨酰基转移酶", unit: "U/L" },
   { aliases: ["白蛋白", "ALB"], name: "白蛋白", unit: "g/L" },
+  { aliases: ["总蛋白", "TP"], name: "总蛋白", unit: "g/L" },
+  { aliases: ["球蛋白", "GLB"], name: "球蛋白", unit: "g/L" },
   { aliases: ["总胆红素", "TBIL"], name: "总胆红素", unit: "μmol/L" },
+  { aliases: ["直接胆红素", "DBIL"], name: "直接胆红素", unit: "μmol/L" },
+  { aliases: ["间接胆红素", "IBIL"], name: "间接胆红素", unit: "μmol/L" },
+  { aliases: ["总胆汁酸", "TBA"], name: "总胆汁酸", unit: "μmol/L" },
+  { aliases: ["前白蛋白", "PA"], name: "前白蛋白", unit: "mg/L" },
+  { aliases: ["尿素", "Urea", "UREA"], name: "尿素", unit: "mmol/L" },
+  { aliases: ["肌酐", "Crea", "CREA", "Cr"], name: "肌酐", unit: "μmol/L" },
+  { aliases: ["尿素/肌酐", "Urea/Crea"], name: "尿素/肌酐", unit: "%" },
+  { aliases: ["尿酸", "UA"], name: "尿酸", unit: "μmol/L" },
+  { aliases: ["二氧化碳", "CO2", "碳酸氢盐", "HCO3"], name: "二氧化碳", unit: "mmol/L" },
+  { aliases: ["钾", "K"], name: "钾", unit: "mmol/L" },
+  { aliases: ["钠", "NA", "Na"], name: "钠", unit: "mmol/L" },
+  { aliases: ["氯", "CL", "Cl"], name: "氯", unit: "mmol/L" },
   { aliases: ["CRP", "C反应蛋白"], name: "CRP", unit: "mg/L" },
   { aliases: ["血糖", "GLU"], name: "血糖", unit: "mmol/L" }
 ];
@@ -2416,32 +2435,71 @@ function extractLabCandidatesFromText(text, sourceName, batchDate = "") {
 
 function extractLabReportDate(text) {
   const sourceText = String(text || "");
-  const explicit = matchText(sourceText, /(?:报告时间|报告日期|申请日期|申请时间|采样时间|采集时间|检验时间|检查时间)[:：\s]*(20\d{2}[-/年]\d{1,2}[-/月]\d{1,2})/);
-  return normalizeDate(explicit || matchText(sourceText, /(20\d{2}[-/年]\d{1,2}[-/月]\d{1,2})/));
+  const keywordDate = matchText(sourceText, /(?:报告时间|报告日期|申请日期|申请时间|采样时间|采集时间|采血时间|标本时间|送检时间|接收时间|审核时间|检验时间|检验日期|检查时间|检查日期|结果时间|结果日期)[:：\s]*(20\d{2}\s*[-/.年]?\s*\d{1,2}\s*[-/.月]?\s*\d{1,2})/);
+  if (keywordDate) return normalizeDate(keywordDate);
+  const candidates = extractDateCandidates(sourceText);
+  if (!candidates.length) return "";
+  const scored = candidates
+    .map((item) => ({
+      ...item,
+      score: scoreDateCandidate(item.line)
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const bestScore = scored[0]?.score ?? 0;
+  const bestDates = new Set(scored.filter((item) => item.score === bestScore && item.score >= 6).map((item) => item.date));
+  if (bestDates.size > 1) return "";
+  return scored[0]?.date || "";
+}
+
+function extractDateCandidates(text) {
+  const candidates = [];
+  String(text || "").split(/\r?\n/).forEach((line, lineIndex) => {
+    const patterns = [
+      /20\d{2}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}\s*日?/g,
+      /20\d{6}/g
+    ];
+    patterns.forEach((pattern) => {
+      let match;
+      while ((match = pattern.exec(line))) {
+        const date = normalizeDate(match[0]);
+        if (date) candidates.push({ date, line, index: lineIndex * 1000 + match.index });
+      }
+    });
+  });
+  return candidates;
+}
+
+function scoreDateCandidate(line) {
+  const text = String(line || "");
+  let score = 0;
+  if (/报告|检验|检查|采样|采集|申请|结果/.test(text)) score += 6;
+  if (/报告结果|检验结果|检查结果|结果状态|急诊|门诊|住院|生化|免疫|血常规|肝功|肾功/.test(text)) score += 3;
+  if (/\d{1,2}:\d{2}/.test(text)) score += 1;
+  if (/打印|当前|系统时间|出生|年龄/.test(text)) score -= 4;
+  return score;
 }
 
 function parseLabOcrLine(line) {
   const raw = line.trim();
-  if (!raw || /申请日期|报告名称|项目名称|参考范围/.test(raw)) return null;
-  const cells = raw.includes("\t") ? raw.split("\t").map((item) => item.trim()) : raw.split(/\s{2,}|\s(?=[HL高低]\s)|\s(?=\d+(?:\.\d+)?)/).map((item) => item.trim());
+  if (!raw || /申请日期|报告名称|项目名称|参考范围|报告时间|报告日期|检查日期|检验日期/.test(raw)) return null;
+  const cells = raw.includes("\t") ? raw.split("\t").map((item) => item.trim()) : raw.split(/\s{2,}|\s(?=[HL高低]\s)|\s(?=[<>≤≥]?\d+(?:\.\d+)?)/).map((item) => item.trim());
   if (cells.length < 4) return parseLabOcrLineByDictionary(raw);
   const code = cells[0].replace(/^★/, "");
-  const valueIndex = cells.findIndex((item, index) => index > 0 && /^[<>]?\d+(?:\.\d+)?$/.test(item));
+  const valueIndex = cells.findIndex((item, index) => index > 0 && isLikelyLabValue(item));
   if (valueIndex < 2) return parseLabOcrLineByDictionary(raw);
   const dictionaryHit = findLabDictionaryEntry(raw);
   const name = cells.slice(1, valueIndex).join("").replace(/^★/, "") || dictionaryHit?.name || code;
   const value = cells[valueIndex];
-  const flagCell = cells[valueIndex + 1] || "";
-  const hasFlag = /^[HL高低]$/.test(flagCell);
-  const hasEmptyFlagCell = flagCell === "" && cells[valueIndex + 2];
-  const unitOffset = hasFlag || hasEmptyFlagCell ? 2 : 1;
-  const unit = cells[valueIndex + unitOffset] || dictionaryHit?.unit || "";
-  const reference = cells[valueIndex + unitOffset + 1] || "";
+  const tail = cells.slice(valueIndex + 1).map((item) => item.replace(/[|｜]/g, "").trim()).filter(Boolean);
+  const flagCell = tail.find((item) => /^[HL高低↑↓]$/.test(item)) || "";
+  const unit = tail.find(isLikelyLabUnit) || dictionaryHit?.unit || "";
+  const unitIndex = tail.findIndex((item) => item === unit);
+  const reference = tail.find((item, index) => index > unitIndex && isLikelyReferenceRange(item)) || "";
   if (!name || !unit) return parseLabOcrLineByDictionary(raw);
   return {
     raw,
-    code,
-    name,
+    code: dictionaryHit?.aliases?.[0] || code,
+    name: dictionaryHit?.name || name,
     value,
     flag: normalizeAbnormalFlag(flagCell),
     unit: normalizeUnit(unit),
@@ -2453,10 +2511,10 @@ function parseLabOcrLine(line) {
 function parseLabOcrLineByDictionary(raw) {
   const entry = findLabDictionaryEntry(raw);
   if (!entry) return null;
-  const alias = entry.aliases.find((item) => raw.toLowerCase().includes(item.toLowerCase())) || entry.aliases[0];
+  const alias = findMatchedLabAlias(entry, raw) || entry.aliases[0];
   const start = raw.toLowerCase().indexOf(alias.toLowerCase());
   const afterAlias = raw.slice(Math.max(0, start + alias.length)).replace(/^★/, "");
-  const match = afterAlias.match(/([<>]?\d+(?:\.\d+)?)(?:\s*([HL高低]))?(?:\s*([%a-zA-Zμµ^~0-9/.-]+))?(?:\s+([\d.]+[-–~][\d.]+))?/);
+  const match = afterAlias.match(/((?:[<>≤≥]=?\s*)?\d+(?:\.\d+)?)(?:\s*([HL高低↑↓]))?(?:\s*([%a-zA-ZμµμmolULgLMlKI\/.*^×~-]+))?(?:\s+([<>≤≥]?\s*\d+(?:\.\d+)?\s*[-–—~至]\s*[<>≤≥]?\s*\d+(?:\.\d+)?|[<>≤≥]\s*\d+(?:\.\d+)?))?/);
   if (!match) return null;
   return {
     raw,
@@ -2472,22 +2530,60 @@ function parseLabOcrLineByDictionary(raw) {
 
 function findLabDictionaryEntry(text) {
   const compact = String(text).replace(/\s+/g, "").toLowerCase();
-  return labItemDictionary.find((entry) => entry.aliases.some((alias) => compact.includes(alias.replace(/\s+/g, "").toLowerCase())));
+  let best = null;
+  labItemDictionary.forEach((entry) => {
+    const alias = findMatchedLabAlias(entry, text);
+    if (!alias) return;
+    if (!best || alias.length > best.alias.length) best = { entry, alias };
+  });
+  return best?.entry || null;
+}
+
+function findMatchedLabAlias(entry, text) {
+  const compact = String(text).replace(/\s+/g, "").toLowerCase();
+  return [...entry.aliases]
+    .sort((a, b) => b.length - a.length)
+    .find((alias) => compact.includes(alias.replace(/\s+/g, "").toLowerCase()));
+}
+
+function isLikelyLabValue(value) {
+  return /^(?:[<>≤≥]=?\s*)?\d+(?:\.\d+)?$/.test(String(value || "").trim());
+}
+
+function isLikelyLabUnit(value) {
+  const text = normalizeUnit(value);
+  return /^(?:%|U\/L|IU\/L|IU\/mL|kU\/L|g\/L|mg\/L|mg\/dL|mmol\/L|μmol\/L|ng\/mL|ng\/L|U\/mL|10\^\d+\/L|pg|fL)$/.test(text);
+}
+
+function isLikelyReferenceRange(value) {
+  return /^[<>≤≥]?\s*\d+(?:\.\d+)?\s*[-–—~至]\s*[<>≤≥]?\s*\d+(?:\.\d+)?$/.test(String(value || "").trim())
+    || /^[<>≤≥]\s*\d+(?:\.\d+)?$/.test(String(value || "").trim());
 }
 
 function normalizeAbnormalFlag(flag) {
-  if (flag === "H" || flag === "高") return "高";
-  if (flag === "L" || flag === "低") return "低";
+  if (flag === "H" || flag === "高" || flag === "↑") return "高";
+  if (flag === "L" || flag === "低" || flag === "↓") return "低";
   return "";
 }
 
 function normalizeUnit(unit) {
-  return unit.replace(/10[~^](\d+)/g, "10^$1").replace("／", "/");
+  return String(unit || "")
+    .replace(/／/g, "/")
+    .replace(/μ/g, "μ")
+    .replace(/µ/g, "μ")
+    .replace(/umol/i, "μmol")
+    .replace(/[×x*]10\^?(\d+)/gi, "10^$1")
+    .replace(/10\*(\d+)/g, "10^$1")
+    .replace(/10[~^](\d+)/g, "10^$1")
+    .trim();
 }
 
 function normalizeDate(value) {
   if (!value) return "";
-  const match = String(value).match(/(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})/);
+  const text = String(value).trim().replace(/[Oo]/g, "0").replace(/\s+/g, "");
+  const compact = text.match(/^(20\d{2})(\d{2})(\d{2})$/);
+  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+  const match = text.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
   if (!match) return "";
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
