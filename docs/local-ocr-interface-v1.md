@@ -66,13 +66,39 @@ python -m pip install --no-index --find-links D:\wheelhouse paddleocr paddlepadd
 
 服务只绑定本机地址，限制请求大小，截图在内存中解码后交给 PaddleOCR，不保存图片文件，不记录完整 OCR 文本。识别结果只作为候选文本返回，仍需在 APP 中人工确认后才写入病例库。
 
+### 部署自检
+
+先在目标电脑上运行自检，不需要启动 APP，也不会保存图片：
+
+```bash
+python tools/check-paddle-ocr-deployment.py
+```
+
+输出会显示：
+
+- 当前 Python 路径和版本。
+- `paddleocr` / `paddlepaddle` 是否已安装。
+- 默认 OCR 服务地址 `http://127.0.0.1:8766/ocr`。
+- 离线 wheelhouse 安装命令。
+
+建议使用 Python 3.10-3.12 部署 PaddleOCR。若当前 Python 版本没有匹配 wheel，自检会在 `dependencies.python.note` 中提示。
+
+如果已准备真实截图，可做一次本机 smoke test：
+
+```bash
+python tools/check-paddle-ocr-deployment.py --image D:\ocr-smoke\lis.png --task lab_table_ocr
+python tools/check-paddle-ocr-deployment.py --image D:\ocr-smoke\ct-report.jpg --task report_text_ocr
+```
+
+依赖未就绪时，smoke test 会返回 `blocked`，只显示图片文件名和原因，不输出 `data_url` 或 base64 内容。依赖就绪后才会调用 PaddleOCR，并只返回文本预览、行数和调试摘要。
+
 健康检查：
 
 ```text
 http://127.0.0.1:8766/health
 ```
 
-健康检查会返回 `dependencies`，用于判断当前电脑是否已安装 `paddleocr` 和 `paddlepaddle`。如果缺依赖，`ready` 为 `false`，并返回离线 wheelhouse 安装提示；这一步只检查环境，不读取或保存任何图片。
+健康检查会返回 `dependencies`，用于判断当前电脑是否已安装 `paddleocr` 和 `paddlepaddle`，并包含当前 Python 版本、自检提示和离线安装计划。如果缺依赖，`ready` 为 `false`，并返回离线 wheelhouse 安装提示；这一步只检查环境，不读取或保存任何图片。
 
 ## 请求
 

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -29,8 +31,23 @@ def main() -> None:
     assert "paddle" in dependency_status
     assert isinstance(dependency_status["paddleocr"]["installed"], bool)
     assert isinstance(dependency_status["paddle"]["installed"], bool)
+    runtime_status = module.python_runtime_status()
+    assert runtime_status["executable"]
+    assert runtime_status["version"].count(".") >= 1
+    assert runtime_status["implementation"]
+    install_plan = module.offline_install_plan()
+    assert install_plan["wheelhouse_example"].endswith("wheelhouse")
+    assert "paddleocr" in install_plan["packages"]
+    assert "paddlepaddle" in install_plan["packages"]
+    assert "--no-index" in install_plan["offline_install_command"]
     if not dependency_status["paddleocr"]["installed"] or not dependency_status["paddle"]["installed"]:
         assert "wheelhouse" in dependency_status["offline_install_hint"]
+        assert dependency_status["install_plan"]["ready"] is False
+        assert dependency_status["install_plan"]["python"]["executable"] == runtime_status["executable"]
+    health_payload = module.health_payload(module.ServerConfig("127.0.0.1", 8766, "ch", "paddle", "", True, 1024 * 1024, True))
+    assert health_payload["dependencies"]["python"]["executable"] == runtime_status["executable"]
+    assert health_payload["image_retained"] is False
+    assert "data_url" not in str(health_payload)
 
     lines = [
         {"text": "编号", "box": box(10, 20)},
@@ -52,6 +69,19 @@ def main() -> None:
     assert debug["columns"][:6] == ["code", "name", "result", "flag", "unit", "reference"]
     assert debug["table_rows"][0][:6] == ["AST", "天门冬氨酸氨基转移酶", "54.0", "H", "U/L", "15-40"]
     assert "data_url" not in str(debug)
+    cli = subprocess.run(
+        [sys.executable, "tools/check-paddle-ocr-deployment.py", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    cli_payload = json.loads(cli.stdout)
+    assert cli_payload["schema_version"] == module.SCHEMA_VERSION
+    assert cli_payload["service_url"] == "http://127.0.0.1:8766/ocr"
+    assert cli_payload["dependencies"]["python"]["executable"] == runtime_status["executable"]
+    assert "--no-index" in cli_payload["dependencies"]["install_plan"]["offline_install_command"]
+    assert cli_payload["image_retained"] is False
+    assert "data_url" not in cli.stdout
     print("PaddleOCR debug payload checks passed")
 
 

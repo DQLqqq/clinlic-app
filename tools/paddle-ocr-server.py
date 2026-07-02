@@ -9,7 +9,9 @@ import importlib.metadata
 import importlib.util
 import json
 import os
+import platform
 import socket
+import sys
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -61,18 +63,65 @@ def package_status(import_name: str, distribution_name: str | None = None) -> di
     return {"installed": installed, "version": version}
 
 
+def python_runtime_status() -> dict[str, Any]:
+    version_info = sys.version_info
+    major_minor = f"{version_info.major}.{version_info.minor}"
+    supported_hint = version_info.major == 3 and version_info.minor in {10, 11, 12}
+    return {
+        "executable": sys.executable,
+        "version": platform.python_version(),
+        "major_minor": major_minor,
+        "implementation": platform.python_implementation(),
+        "platform": platform.platform(),
+        "supported_hint": supported_hint,
+        "note": "" if supported_hint else "建议使用 Python 3.10-3.12 环境部署 PaddleOCR；当前版本可能没有匹配 wheel。",
+    }
+
+
+def offline_install_plan(wheelhouse: str = r"D:\wheelhouse") -> dict[str, Any]:
+    packages = ["paddleocr", "paddlepaddle", "opencv-python", "pillow"]
+    package_text = " ".join(packages)
+    return {
+        "wheelhouse_example": wheelhouse,
+        "packages": packages,
+        "online_prepare_command": f"python -m pip download -d {wheelhouse} {package_text}",
+        "offline_install_command": f"python -m pip install --no-index --find-links {wheelhouse} {package_text}",
+    }
+
+
 def paddle_dependency_status() -> dict[str, Any]:
+    python_status = python_runtime_status()
+    install_plan = offline_install_plan()
     paddleocr = package_status("paddleocr")
     paddle = package_status("paddle", "paddlepaddle")
     missing = [name for name, status in {"paddleocr": paddleocr, "paddle": paddle}.items() if not status["installed"]]
+    ready = not missing and python_status["supported_hint"]
     return {
+        "python": python_status,
         "paddleocr": paddleocr,
         "paddle": paddle,
-        "ready": not missing,
+        "ready": ready,
         "missing": missing,
-        "offline_install_hint": "python -m pip install --no-index --find-links D:\\wheelhouse paddleocr paddlepaddle opencv-python pillow"
+        "offline_install_hint": install_plan["offline_install_command"]
         if missing
         else "",
+        "install_plan": {
+            **install_plan,
+            "python": python_status,
+            "ready": ready,
+        },
+    }
+
+
+def health_payload(config: ServerConfig) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "schema_version": SCHEMA_VERSION,
+        "engine": "paddleocr-local",
+        "paddle_engine": config.engine,
+        "lang": config.lang,
+        "dependencies": paddle_dependency_status(),
+        "image_retained": False,
     }
 
 
@@ -664,19 +713,7 @@ def make_handler(config: ServerConfig):
             if self.path != "/health":
                 send_json(self, 404, {"ok": False, "error": "仅支持 GET /health"})
                 return
-            send_json(
-                self,
-                200,
-                {
-                    "ok": True,
-                    "schema_version": SCHEMA_VERSION,
-                    "engine": "paddleocr-local",
-                    "paddle_engine": config.engine,
-                    "lang": config.lang,
-                    "dependencies": paddle_dependency_status(),
-                    "image_retained": False,
-                },
-            )
+            send_json(self, 200, health_payload(config))
 
         def do_POST(self) -> None:
             origin = self.headers.get("Origin")
