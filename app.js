@@ -155,7 +155,7 @@ const knowledgeBase = [
   },
   {
     keys: ["开源", "模型", "llama", "qwen", "gemma", "ollama"],
-    answer: "建议默认规则助手，可选 llama.cpp + GGUF 小模型。选择模型文件后要校验 SHA-256，再启用；低配电脑优先小模型并限制上下文 2K-4K。"
+    answer: "建议普通临床电脑使用默认辅助。需要增强整理能力时，由信息科准备离线组件并完成文件校验后再启用。"
   },
   {
     keys: ["截图", "ocr", "化验截图", "检验截图", "图片导入"],
@@ -1258,8 +1258,8 @@ function renderModelConfig() {
         <details class="advanced-box">
           <summary>信息科高级设置</summary>
           <div class="form-grid">
-            ${selectField("本地组件", "model_model", cfg.model, ["规则助手内置知识库", "Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B-GGUF", "Qwen/Qwen3-4B-GGUF", "ggml-org/gemma-4-E2B-it-GGUF", "ggml-org/gemma-4-E4B-it-GGUF"])}
-            ${selectField("运行后端", "model_runner", cfg.runner, ["llama.cpp", "Ollama", "Transformers/Python"])}
+            ${selectFieldWithLabels("本地组件", "model_model", cfg.model, ["规则助手内置知识库", "Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B-GGUF", "Qwen/Qwen3-4B-GGUF", "ggml-org/gemma-4-E2B-it-GGUF", "ggml-org/gemma-4-E4B-it-GGUF"], localComponentLabel)}
+            ${selectFieldWithLabels("运行方式", "model_runner", cfg.runner, ["llama.cpp", "Ollama", "Transformers/Python"], localRunnerLabel)}
             ${numberField("上下文长度", "model_contextTokens", cfg.contextTokens)}
             ${numberField("最大输出", "model_maxOutputTokens", cfg.maxOutputTokens)}
             ${readonlyField("文件大小", cfg.modelFileSize || "未选择")}
@@ -1304,8 +1304,24 @@ function getModelRecommendation(cfg) {
 
 function assistantModeLabel(mode) {
   if (mode === "本地小模型") return "本地增强";
-  if (mode === "禁用AI") return "关闭";
+  if (mode === "禁用AI") return "关闭辅助";
   return "默认";
+}
+
+function localComponentLabel(model) {
+  if (model === "规则助手内置知识库") return "默认内置组件";
+  if (/0\.6B/.test(model)) return "低配电脑组件";
+  if (/1\.7B/.test(model)) return "普通电脑组件";
+  if (/4B|E4/.test(model)) return "高配电脑组件";
+  if (/E2B/.test(model)) return "平衡组件";
+  return "离线组件";
+}
+
+function localRunnerLabel(runner) {
+  if (runner === "llama.cpp") return "本机轻量运行";
+  if (runner === "Ollama") return "本机服务运行";
+  if (runner === "Transformers/Python") return "研究电脑运行";
+  return "本机运行";
 }
 
 function assistantStatusLabel(status) {
@@ -2473,8 +2489,7 @@ function applyBatchDateToLabCandidates(patient, date) {
 
 function extractLabCandidatesFromText(text, sourceName, batchDate = "") {
   const sourceDate = normalizeDate(batchDate) || extractLabReportDate(text);
-  const candidates = text
-    .split(/\r?\n/)
+  const candidates = normalizeLabOcrRows(text)
     .map(parseLabOcrLine)
     .filter(Boolean)
     .map((lab) => ({
@@ -2499,6 +2514,42 @@ function extractLabCandidatesFromText(text, sourceName, batchDate = "") {
       }
     }));
   return normalizeCandidateList(candidates);
+}
+
+function normalizeLabOcrRows(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const normalized = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const cells = line.split("\t").map((item) => item.trim());
+    const nextLine = lines[index + 1] || "";
+    const nextCells = nextLine.split("\t").map((item) => item.trim());
+    const lineHasValue = cells.slice(1).some(isLikelyLabValue);
+    const nextHasValue = nextCells.some(isLikelyLabValue);
+    const nextStartsNewItem = isLikelyStandaloneLabRow(nextCells);
+    if (cells.length >= 2 && !lineHasValue && nextLine && nextHasValue && !nextStartsNewItem) {
+      normalized.push(`${cells[0]}\t${cells.slice(1).join("")}${nextLine}`);
+      index += 1;
+    } else {
+      normalized.push(line);
+    }
+  }
+  return normalized;
+}
+
+function isLikelyStandaloneLabRow(cells) {
+  const first = cells[0] || "";
+  if (!first || !cells.slice(1).some(isLikelyLabValue)) return false;
+  if (isLikelyLabCodeCell(first)) return true;
+  if (findExactLabDictionaryEntry(first)) return true;
+  return cells.length >= 3 && isLikelyLabValue(cells[1]) && cells.slice(2).some(isLikelyLabUnit);
+}
+
+function isLikelyLabCodeCell(value) {
+  return /^[A-Za-z][A-Za-z0-9/%+._-]{0,16}$/.test(String(value || "").trim());
 }
 
 function extractLabReportDate(text) {
@@ -2586,12 +2637,13 @@ function parseLabOcrLine(line) {
   const raw = line.trim();
   if (!raw || /申请日期|报告名称|项目名称|参考范围|报告时间|报告日期|检查日期|检验日期/.test(raw)) return null;
   const cells = raw.includes("\t") ? raw.split("\t").map((item) => item.trim()) : raw.split(/\s{2,}|\s(?=[HL高低]\s)|\s(?=[<>≤≥]?\d+(?:\.\d+)?)/).map((item) => item.trim());
-  if (raw.includes("\t") && cells.length >= 3 && !isLikelyLabValue(cells[2])) return null;
-  if (cells.length < 4) return parseLabOcrLineByDictionary(raw);
+  const firstCellValueRow = raw.includes("\t") && cells.length >= 3 && isLikelyLabValue(cells[1]) && findExactLabDictionaryEntry(cells[0]);
+  if (raw.includes("\t") && cells.length >= 3 && !isLikelyLabValue(cells[2]) && !firstCellValueRow) return null;
+  if (cells.length < 3) return parseLabOcrLineByDictionary(raw);
   const code = cells[0].replace(/^★/, "");
   const valueIndex = cells.findIndex((item, index) => index > 0 && isLikelyLabValue(item));
   if (valueIndex < 2) return parseLabOcrLineByDictionary(raw);
-  const dictionaryHit = findLabDictionaryEntry(raw);
+  const dictionaryHit = findLabDictionaryEntry(code) || findLabDictionaryEntry(raw);
   const name = cells.slice(1, valueIndex).join("").replace(/^★/, "") || dictionaryHit?.name || code;
   const value = cells[valueIndex];
   const tail = cells.slice(valueIndex + 1).map((item) => item.replace(/[|｜]/g, "").trim()).filter(Boolean);
@@ -2599,11 +2651,12 @@ function parseLabOcrLine(line) {
   const unit = tail.find(isLikelyLabUnit) || dictionaryHit?.unit || "";
   const unitIndex = tail.findIndex((item) => item === unit);
   const reference = tail.find((item, index) => index > unitIndex && isLikelyReferenceRange(item)) || "";
-  if (!name || !unit) return parseLabOcrLineByDictionary(raw);
+  if (!name || (!unit && !dictionaryHit)) return parseLabOcrLineByDictionary(raw);
+  const dictionaryName = dictionaryHit?.name || "";
   return {
     raw,
     code: dictionaryHit?.aliases?.[0] || code,
-    name: dictionaryHit?.name || name,
+    name: dictionaryName && dictionaryName !== dictionaryHit?.aliases?.[0] ? dictionaryName : name,
     value,
     flag: normalizeAbnormalFlag(flagCell),
     unit: normalizeUnit(unit),
@@ -2633,7 +2686,6 @@ function parseLabOcrLineByDictionary(raw) {
 }
 
 function findLabDictionaryEntry(text) {
-  const compact = String(text).replace(/\s+/g, "").toLowerCase();
   let best = null;
   labItemDictionary.forEach((entry) => {
     const alias = findMatchedLabAlias(entry, text);
@@ -2641,6 +2693,16 @@ function findLabDictionaryEntry(text) {
     if (!best || alias.length > best.alias.length) best = { entry, alias };
   });
   return best?.entry || null;
+}
+
+function findExactLabDictionaryEntry(text) {
+  const target = normalizeLabAliasKey(text);
+  if (!target) return null;
+  return labItemDictionary.find((entry) => normalizeLabAliasKey(entry.name) === target || entry.aliases.some((alias) => normalizeLabAliasKey(alias) === target)) || null;
+}
+
+function normalizeLabAliasKey(value) {
+  return String(value || "").replace(/\s+/g, "").toLowerCase();
 }
 
 function findMatchedLabAlias(entry, text) {
@@ -2847,8 +2909,38 @@ function clearOcrWorkbenchAfterImport(patient) {
 }
 
 function pruneCompletedCaptureQueue(patient) {
-  if (getCandidates(patient).length) return;
-  clearOcrWorkbenchAfterImport(patient);
+  if (hasPendingLabCandidates(patient)) return;
+  const workbench = getOcrWorkbench(patient);
+  const queue = getCaptureQueue(workbench);
+  const remaining = [];
+  queue.forEach((item) => {
+    if (isCompletedCaptureQueueItem(item)) {
+      labScreenshotBatchPayloads.delete(item.capture_id);
+    } else {
+      remaining.push(item);
+    }
+  });
+  if (!remaining.length) {
+    clearOcrWorkbenchAfterImport(patient);
+    return;
+  }
+  workbench.capture_queue = remaining;
+  workbench.image_name = "";
+  workbench.image_size = "";
+  workbench.ocr_text = "";
+  workbench.parsed_at = "";
+  workbench.ocr_engine = "";
+  workbench.ocr_debug = null;
+  labScreenshotPreviewUrl = "";
+  labScreenshotOcrPayload = null;
+}
+
+function hasPendingLabCandidates(patient) {
+  return getCandidates(patient).some((item) => item.field?.startsWith("lab:"));
+}
+
+function isCompletedCaptureQueueItem(item) {
+  return ["已生成候选", "已完成", "已确认入库"].includes(item?.status) || Boolean(item?.candidate_count || item?.ocr_text);
 }
 
 async function runAllCaptureQueue(patient) {
@@ -3366,11 +3458,17 @@ function labIdentity(lab) {
 }
 
 function isValidLabRecord(lab) {
+  const hasUnit = String(lab?.unit_raw || "").trim();
   return Boolean(
     String(lab?.item_name_raw || "").trim() &&
     String(lab?.value_raw || "").trim() &&
-    String(lab?.unit_raw || "").trim()
+    (hasUnit || isUnitOptionalLab(lab))
   );
+}
+
+function isUnitOptionalLab(lab) {
+  const entry = findLabDictionaryEntry(lab?.item_name_std || lab?.item_name_raw || "");
+  return Boolean(entry && entry.unit === "");
 }
 
 function normalizeComparable(value) {

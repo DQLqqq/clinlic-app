@@ -93,6 +93,32 @@ function verifyLabOcrSelectedListDateAndCleanup(context) {
   assert(candidates.some((item) => item.payload.item_name_raw === "中性粒细胞百分率"), "NEUT% candidate missing");
 }
 
+function verifyLabOcrWrappedLongName(context) {
+  const text = [
+    "编号\t项目名称\t结果\t结果提示\t异常提示\t辅助诊断\t单位\t参考范围",
+    "AST/ALT\t天门冬氨酸氨基转移",
+    "酶/丙氨酸氨基转移酶\t1.46\t\t\t\t\t"
+  ].join("\n");
+  const candidates = context.extractLabCandidatesFromText(text, "长项目名换行", "2026-01-02");
+  assert(candidates.length === 1, `expected one wrapped lab candidate, got ${candidates.length}`);
+  assert(candidates[0].payload.item_name_std === "AST/ALT", `bad wrapped lab code ${candidates[0].payload.item_name_std}`);
+  assert(candidates[0].payload.item_name_raw === "天门冬氨酸氨基转移酶/丙氨酸氨基转移酶", `bad wrapped lab name ${candidates[0].payload.item_name_raw}`);
+  assert(candidates[0].payload.value_raw === "1.46", `bad wrapped lab value ${candidates[0].payload.value_raw}`);
+}
+
+function verifyLabOcrDoesNotMergeChineseStandaloneRows(context) {
+  const text = [
+    "编号\t项目名称\t结果\t单位\t参考范围",
+    "TBIL\t总胆红素",
+    "直接胆红素\t5.2\tμmol/L\t0-8"
+  ].join("\n");
+  const candidates = context.extractLabCandidatesFromText(text, "中文项目行", "2026-01-02");
+  assert(candidates.length === 1, `expected one standalone Chinese lab candidate, got ${candidates.length}`);
+  assert(candidates[0].payload.item_name_raw === "直接胆红素", `standalone Chinese lab row was merged incorrectly: ${candidates[0].payload.item_name_raw}`);
+  assert(candidates[0].payload.value_raw === "5.2", `bad standalone Chinese lab value ${candidates[0].payload.value_raw}`);
+  assert(candidates[0].payload.unit_raw === "μmol/L", `bad standalone Chinese lab unit ${candidates[0].payload.unit_raw}`);
+}
+
 function verifyReportOcrCandidateFlow(context) {
   const patient = context.createPatient();
   const text = [
@@ -186,6 +212,22 @@ function verifyInvalidLabCandidateIsRetained(context) {
   assert(context.shouldKeepReviewModalOpen(summary), "review modal should remain open when a batch has failed candidates");
 }
 
+function verifyUnitlessLabRatioCanBeConfirmed(context) {
+  const patient = context.createPatient();
+  const text = [
+    "编号\t项目名称\t结果\t结果提示\t异常提示\t辅助诊断\t单位\t参考范围",
+    "AST/ALT\t天门冬氨酸氨基转移",
+    "酶/丙氨酸氨基转移酶\t1.46\t\t\t\t\t"
+  ].join("\n");
+  const candidate = context.extractLabCandidatesFromText(text, "长项目名换行", "2026-01-04")[0];
+  patient.candidates = [candidate];
+  const before = patient.labs.length;
+  const summary = context.confirmCandidateBatch(patient, [candidate]);
+  assert(summary.confirmed === 1, `unitless AST/ALT ratio should confirm, got ${summary.confirmed}`);
+  assert(patient.labs.length === before + 1, "unitless AST/ALT ratio should be written to labs");
+  assert(patient.labs.at(-1).item_name_raw === "天门冬氨酸氨基转移酶/丙氨酸氨基转移酶", "wrong unitless lab ratio inserted");
+}
+
 function verifyReviewModalStaysOpenWhenOtherCandidatesRemain(context) {
   const patient = context.createPatient();
   const lab = context.extractLabCandidatesFromText("WBC\t白细胞\t4.63\t\t\t\t10^9/L\t3.69-9.16", "手动验证", "2026-01-02")[0];
@@ -197,6 +239,48 @@ function verifyReviewModalStaysOpenWhenOtherCandidatesRemain(context) {
   assert(context.shouldKeepReviewModalOpen(summary, patient), "review modal should remain open when other pending candidates remain");
 }
 
+function verifyLabOcrWorkbenchClearsWhenOnlyNonLabCandidatesRemain(context) {
+  const patient = context.createPatient();
+  const lab = context.extractLabCandidatesFromText("WBC\t白细胞\t4.63\t\t\t\t10^9/L\t3.69-9.16", "截图A", "2026-01-02")[0];
+  const history = context.createHistoryCandidate("吸烟史", "否认", "人工新增");
+  patient.candidates = [lab, history];
+  const workbench = context.getOcrWorkbench(patient);
+  workbench.image_name = "lab-shot.png";
+  workbench.image_size = "80KB";
+  workbench.ocr_text = "WBC\t白细胞\t4.63\t\t\t\t10^9/L\t3.69-9.16";
+  workbench.capture_queue = [
+    { capture_id: "cap-1", name: "lab-shot.png", status: "已生成候选", candidate_count: 1, ocr_text: workbench.ocr_text }
+  ];
+  const summary = context.confirmCandidateBatch(patient, [lab]);
+  assert(summary.confirmed === 1, `expected lab confirmation before pruning, got ${summary.confirmed}`);
+  context.pruneCompletedCaptureQueue(patient);
+  assert(patient.candidates.length === 1 && patient.candidates[0].field.startsWith("history:"), "non-lab candidate should remain pending");
+  assert(workbench.image_name === "", "lab screenshot name should be cleared after lab candidates finish");
+  assert(workbench.ocr_text === "", "lab OCR text should be cleared after lab candidates finish");
+  assert(workbench.capture_queue.length === 0, "completed capture queue should be cleared after lab candidates finish");
+}
+
+function verifyPendingCaptureQueueItemsArePreserved(context) {
+  const patient = context.createPatient();
+  const lab = context.extractLabCandidatesFromText("WBC\t白细胞\t4.63\t\t\t\t10^9/L\t3.69-9.16", "截图A", "2026-01-02")[0];
+  patient.candidates = [lab];
+  const workbench = context.getOcrWorkbench(patient);
+  workbench.image_name = "done-shot.png";
+  workbench.image_size = "80KB";
+  workbench.ocr_text = "WBC\t白细胞\t4.63\t\t\t\t10^9/L\t3.69-9.16";
+  workbench.capture_queue = [
+    { capture_id: "cap-done", name: "done-shot.png", status: "已生成候选", candidate_count: 1, ocr_text: workbench.ocr_text },
+    { capture_id: "cap-pending", name: "pending-shot.png", status: "待识别", candidate_count: 0, ocr_text: "" }
+  ];
+  const summary = context.confirmCandidateBatch(patient, [lab]);
+  assert(summary.confirmed === 1, `expected lab confirmation before queue pruning, got ${summary.confirmed}`);
+  context.pruneCompletedCaptureQueue(patient);
+  assert(workbench.capture_queue.length === 1, `pending capture item should remain, got ${workbench.capture_queue.length}`);
+  assert(workbench.capture_queue[0].capture_id === "cap-pending", "wrong capture queue item remained after pruning");
+  assert(workbench.image_name === "", "completed screenshot preview should be cleared after pruning");
+  assert(workbench.ocr_text === "", "completed screenshot OCR text should be cleared after pruning");
+}
+
 function verifyFriendlyUiCopy() {
   const visibleSource = [
     fs.readFileSync("index.html", "utf8"),
@@ -205,14 +289,25 @@ function verifyFriendlyUiCopy() {
   ["AI候选", "AI助手", "本地 AI 候选", "AI辅助设置", "模型配置"].forEach((term) => {
     assert(!visibleSource.includes(term), `clinical UI still exposes old technical copy: ${term}`);
   });
+  const modelConfigVisibleText = context.renderModelConfig()
+    .replace(/\svalue="[^"]*"/g, "")
+    .replace(/\saccept="[^"]*"/g, "");
+  ["Qwen", "GGUF", "llama.cpp", "Ollama", "Transformers", "本地小模型", "禁用AI"].forEach((term) => {
+    assert(!modelConfigVisibleText.includes(term), `assistant settings still expose technical copy: ${term}`);
+  });
 }
 
 const context = loadAppContext();
 verifyLabOcrBatchDate(context);
 verifyLabOcrSelectedListDateAndCleanup(context);
+verifyLabOcrWrappedLongName(context);
+verifyLabOcrDoesNotMergeChineseStandaloneRows(context);
 verifyReportOcrCandidateFlow(context);
 verifyReportOcrTypes(context);
 verifyInvalidLabCandidateIsRetained(context);
+verifyUnitlessLabRatioCanBeConfirmed(context);
 verifyReviewModalStaysOpenWhenOtherCandidatesRemain(context);
+verifyLabOcrWorkbenchClearsWhenOnlyNonLabCandidatesRemain(context);
+verifyPendingCaptureQueueItemsArePreserved(context);
 verifyFriendlyUiCopy();
 console.log("OCR workflow checks passed");
