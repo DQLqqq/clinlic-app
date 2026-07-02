@@ -14,16 +14,22 @@ function Write-Step($Message) {
 }
 
 function Find-Python {
+  $bundledPython = Join-Path $Root "runtime\python\python.exe"
+  if (Test-Path $bundledPython) { return $bundledPython }
+  $embeddedPython = Join-Path $Root "runtime\python-embed\python.exe"
+  if (Test-Path $embeddedPython) { return $embeddedPython }
+  if ($env:CLINICAL_OCR_PYTHON -and (Test-Path $env:CLINICAL_OCR_PYTHON)) { return $env:CLINICAL_OCR_PYTHON }
   $python = Get-Command python -ErrorAction SilentlyContinue
   if ($python) { return $python.Source }
   $python3 = Get-Command python3 -ErrorAction SilentlyContinue
   if ($python3) { return $python3.Source }
-  throw "没有找到 Python。请联系信息科安装离线识别运行环境。"
+  throw "离线识别运行包不完整：缺少 runtime\python\python.exe。请联系信息科补齐软件自带运行包；医院电脑不需要联网下载。"
 }
 
 Write-Host "临床研究数据采集 APP - 本机识别服务启动"
 Write-Host "地址：$HostAddress`:$Port"
 Write-Host "说明：本服务只在本机运行，不会联网，不会上传，不会保存图片。"
+Write-Host "运行环境：优先使用软件自带 runtime\python\python.exe；医院电脑不需要单独安装 Python。"
 
 try {
   $Python = Find-Python

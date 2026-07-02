@@ -3290,8 +3290,8 @@ function ocrServiceStatusFromHealth(response, payload) {
     return {
       status_key: "missing_dependencies",
       status_label: "缺少识别组件",
-      doctor_message: "这台电脑缺少识别组件，请联系信息科处理。",
-      next_steps: ["联系信息科处理", "重新检查", "继续手动粘贴文字"]
+      doctor_message: "离线识别运行包不完整，请联系信息科补齐；当前仍可继续手动粘贴文字。",
+      next_steps: ["联系信息科补齐离线运行包", "重新检查", "继续手动粘贴文字"]
     };
   }
   if (dependencies.offline_ready === false || modelCache.ready === false) {

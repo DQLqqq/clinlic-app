@@ -48,7 +48,7 @@ def main() -> None:
     assert isinstance(dependency_status["model_cache"]["ready"], bool)
     assert isinstance(dependency_status["paddleocr"]["installed"], bool)
     assert isinstance(dependency_status["paddle"]["installed"], bool)
-    assert module.offline_start_block_reason({"ready": False, "missing": ["paddleocr"], "model_cache": {"ready": False}}).startswith("缺少识别组件")
+    assert module.offline_start_block_reason({"ready": False, "missing": ["paddleocr"], "model_cache": {"ready": False}}).startswith("离线识别运行包不完整")
     assert module.offline_start_block_reason({"ready": True, "offline_ready": False, "model_cache": {"ready": False}}).startswith("离线识别模型文件不完整")
     assert module.offline_start_block_reason({"ready": True, "offline_ready": True, "model_cache": {"ready": True}}) == ""
     assert check_module.is_healthy_service_payload(
@@ -268,11 +268,20 @@ def main() -> None:
         assert "store_image" not in text.lower(), f"{script_name} should not persist images"
         forbidden = ["Invoke-WebRequest", "curl ", "wget ", "pip install", "pip download"]
         assert not any(term.lower() in text.lower() for term in forbidden), f"{script_name} should not download or install online"
+        if script_name.endswith(".ps1"):
+            assert "runtime\\python\\python.exe" in text, f"{script_name} should prefer bundled offline Python runtime"
+            assert "CLINICAL_OCR_PYTHON" in text, f"{script_name} should allow an explicit offline Python runtime path"
+            assert "离线识别运行包不完整" in text, f"{script_name} should give a no-internet runtime-package message"
+            assert "请联系信息科安装" not in text and "没有找到 Python" not in text, f"{script_name} should not ask doctors to install Python"
     ps1_text = Path("start-ocr-service.ps1").read_text(encoding="utf-8")
     assert "paddle-ocr-server.py" in ps1_text
     assert "--allow-file-origin" in ps1_text
     assert "不会联网" in ps1_text
     assert "不会保存图片" in ps1_text
+    runtime_readme = Path("runtime/README.md").read_text(encoding="utf-8")
+    assert "runtime\\python\\python.exe" in runtime_readme
+    assert "不需要联网下载" in runtime_readme
+    assert "不需要医生手动安装 Python" in runtime_readme
     print("PaddleOCR debug payload checks passed")
 
 

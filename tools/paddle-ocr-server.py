@@ -185,7 +185,7 @@ def health_payload(config: ServerConfig) -> dict[str, Any]:
 def offline_start_block_reason(dependencies: dict[str, Any]) -> str:
     if not dependencies.get("ready"):
         missing = "、".join(str(item) for item in dependencies.get("missing") or []) or "识别组件"
-        return f"缺少识别组件：{missing}。请先完成离线安装。"
+        return f"离线识别运行包不完整，缺少识别组件：{missing}。请先补齐随软件携带的运行包。"
     model_cache = dependencies.get("model_cache") or {}
     if not dependencies.get("offline_ready", dependencies.get("ready")) or not model_cache.get("ready", True):
         return "离线识别模型文件不完整。请先复制完整离线模型文件后再启动服务。"
@@ -323,7 +323,7 @@ def get_paddle_engine(config: ServerConfig) -> Any:
     try:
         from paddleocr import PaddleOCR
     except Exception as exc:
-        raise RuntimeError("未安装 PaddleOCR/PaddlePaddle，请先按文档安装本机依赖") from exc
+        raise RuntimeError("离线识别运行包不完整，缺少 PaddleOCR/PaddlePaddle") from exc
 
     option_sets: list[dict[str, Any]] = []
     base_options: dict[str, Any] = {"lang": config.lang}

@@ -172,8 +172,8 @@ def classify_deployment_status(dependencies: dict[str, Any], service: dict[str, 
         return deployment_status(
             "missing_dependencies",
             "缺少识别组件",
-            f"这台电脑还缺少 {missing}，请让信息科先安装离线识别组件。",
-            ["联系信息科处理", "暂时继续手动粘贴文字"],
+            f"离线识别运行包不完整，缺少 {missing}。请联系信息科补齐随软件携带的运行包；当前仍可继续手动粘贴文字。",
+            ["联系信息科补齐离线运行包", "暂时继续手动粘贴文字"],
         )
     model_cache = dependencies.get("model_cache") or {}
     if not dependencies.get("offline_ready", dependencies.get("ready")) or not model_cache.get("ready", True):
