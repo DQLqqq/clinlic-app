@@ -59,11 +59,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         "image_name": image_path.name,
         "reason": "",
     }
+    block_reason = smoke_block_reason(health["dependencies"])
+    if block_reason:
+        payload["smoke_test"]["reason"] = block_reason
+        return payload
     if not image_path.exists():
         payload["smoke_test"]["reason"] = "image file not found"
-        return payload
-    if not health["dependencies"]["ready"]:
-        payload["smoke_test"]["reason"] = "paddleocr/paddle dependencies are not ready"
         return payload
 
     data_url, mime_type, image_size = data_url_for_image(image_path)
@@ -99,6 +100,14 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
+def smoke_block_reason(dependencies: dict[str, Any]) -> str:
+    if not dependencies.get("ready"):
+        return "paddleocr/paddle dependencies are not ready"
+    if not dependencies.get("offline_ready", dependencies.get("ready")):
+        return "paddleocr model cache is not ready"
+    return ""
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check offline PaddleOCR deployment readiness.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -126,8 +135,14 @@ def main() -> int:
         print(f"PaddleOCR installed: {deps['paddleocr']['installed']} {deps['paddleocr']['version']}")
         print(f"Paddle installed: {deps['paddle']['installed']} {deps['paddle']['version']}")
         print(f"Ready: {deps['ready']}")
+        model_cache = deps.get("model_cache") or {}
+        print(f"Model cache: {model_cache.get('ready')} ({model_cache.get('base_dir', '')})")
+        if model_cache.get("missing"):
+            print(f"Missing models: {', '.join(model_cache['missing'])}")
         if deps.get("offline_install_hint"):
             print(f"Offline install: {deps['offline_install_hint']}")
+        if model_cache.get("offline_prepare_hint"):
+            print(f"Offline models: {model_cache['offline_prepare_hint']}")
         if payload["smoke_test"]["requested"]:
             print(f"Smoke test: {payload['smoke_test']['status']}")
             if payload["smoke_test"].get("reason"):

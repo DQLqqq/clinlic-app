@@ -78,6 +78,7 @@ python tools/check-paddle-ocr-deployment.py
 
 - 当前 Python 路径和版本。
 - `paddleocr` / `paddlepaddle` 是否已安装。
+- PaddleOCR 模型缓存目录是否已准备好。
 - 默认 OCR 服务地址 `http://127.0.0.1:8766/ocr`。
 - 离线 wheelhouse 安装命令。
 
@@ -91,6 +92,8 @@ python tools/check-paddle-ocr-deployment.py --image D:\ocr-smoke\ct-report.jpg -
 ```
 
 依赖未就绪时，smoke test 会返回 `blocked`，只显示图片文件名和原因，不输出 `data_url` 或 base64 内容。依赖就绪后才会调用 PaddleOCR，并只返回文本预览、行数和调试摘要。
+
+首次在联网电脑运行真实截图 smoke test 时，PaddleOCR 可能会下载模型到 `~/.paddlex/official_models`。离线临床电脑部署前，应把该 `official_models` 目录随部署包复制到同一位置，或由信息科指定等效模型目录；目标电脑断网后再运行一次 smoke test，确认 `dependencies.model_cache.ready` 为 `true`。
 
 健康检查：
 
