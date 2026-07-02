@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import importlib.metadata
+import importlib.util
 import json
 import os
 import socket
@@ -45,6 +47,33 @@ class ServerConfig:
 
 
 _ocr_engine: Any | None = None
+
+
+def package_status(import_name: str, distribution_name: str | None = None) -> dict[str, Any]:
+    spec = importlib.util.find_spec(import_name)
+    installed = spec is not None
+    version = ""
+    if installed:
+        try:
+            version = importlib.metadata.version(distribution_name or import_name)
+        except importlib.metadata.PackageNotFoundError:
+            version = "unknown"
+    return {"installed": installed, "version": version}
+
+
+def paddle_dependency_status() -> dict[str, Any]:
+    paddleocr = package_status("paddleocr")
+    paddle = package_status("paddle", "paddlepaddle")
+    missing = [name for name, status in {"paddleocr": paddleocr, "paddle": paddle}.items() if not status["installed"]]
+    return {
+        "paddleocr": paddleocr,
+        "paddle": paddle,
+        "ready": not missing,
+        "missing": missing,
+        "offline_install_hint": "python -m pip install --no-index --find-links D:\\wheelhouse paddleocr paddlepaddle opencv-python pillow"
+        if missing
+        else "",
+    }
 
 
 def normalize_host(value: str) -> str:
@@ -644,6 +673,7 @@ def make_handler(config: ServerConfig):
                     "engine": "paddleocr-local",
                     "paddle_engine": config.engine,
                     "lang": config.lang,
+                    "dependencies": paddle_dependency_status(),
                     "image_retained": False,
                 },
             )

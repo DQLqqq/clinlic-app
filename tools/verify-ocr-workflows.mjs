@@ -72,6 +72,27 @@ function verifyLabOcrBatchDate(context) {
   assert(candidates.every((item) => item.payload.specimen_time === "2026-01-02"), "batch date not applied to lab candidates");
 }
 
+function verifyLabOcrSelectedListDateAndCleanup(context) {
+  const text = [
+    "申请日期\t姓名\t医嘱名称\t结果状态",
+    "2026-01-03 10:52:53\t赫某珍\t血培养及鉴定(仪器法)\t报告结果",
+    "2026-01-02 11:58:07\t赫某珍\t急检腹水淀粉酶(常规化学)\t报告结果",
+    "2026-01-02 11:17:33\t赫某珍\t全血细胞分析(血常规)\t异 报告结果",
+    "2026-01-01 10:11:34\t赫某珍\t急检腹水淀粉酶(常规化学)\t报告结果",
+    "全血细胞分析(血常规)(历次数据)",
+    "编号\t项目名称\t结果\t结果提示\t异常提示\t辅助诊断\t单位\t参考范围\t历次",
+    "WBC\t白细胞\t4.63\t\t\t\t10^9/L\t3.69-9.16\t4.19",
+    "NEUT%\t中性粒细胞百分率\t84.90\t\tH\t\t%\t50-70\t91.80",
+    "ALB\t白蛋白\t\t\t\t\tg/L\t40-55\t",
+    "WBC\t白细胞\t4.63\t\t\t\t10^9/L\t3.69-9.16\t4.19"
+  ].join("\n");
+  const candidates = context.extractLabCandidatesFromText(text, "真实LIS截图", "");
+  assert(candidates.length === 2, `expected 2 unique non-empty lab candidates, got ${candidates.length}`);
+  assert(candidates.every((item) => item.payload.specimen_time === "2026-01-02"), "selected left-list lab date not applied");
+  assert(candidates.some((item) => item.payload.item_name_raw === "白细胞"), "WBC candidate missing");
+  assert(candidates.some((item) => item.payload.item_name_raw === "中性粒细胞百分率"), "NEUT% candidate missing");
+}
+
 function verifyReportOcrCandidateFlow(context) {
   const patient = context.createPatient();
   const text = [
@@ -121,9 +142,77 @@ function verifyReportOcrCandidateFlow(context) {
   const workbench = context.getReportOcrWorkbench(patient);
   assert(workbench.image_name === "", "report image name should be cleared after confirmation");
   assert(workbench.ocr_text === "", "report OCR text should be cleared after confirmation");
+  assert(patient.report_scratch === "", "temporary report source text should be cleared after report OCR confirmation");
+}
+
+function verifyReportOcrTypes(context) {
+  const pathologyText = [
+    "哈尔滨医科大学附属第一医院",
+    "病理报告",
+    "病理号：P20260527001",
+    "报告日期：2026-05-29",
+    "病理诊断：胰腺导管腺癌，伴神经侵犯。"
+  ].join("\n");
+  const pathology = context.extractReportCandidatesFromText(pathologyText, { image_name: "pathology.jpg" })[0];
+  assert(pathology.payload.report_type === "病理报告", `bad pathology report type ${pathology.payload.report_type}`);
+  assert(pathology.payload.report_title === "病理报告", `bad pathology report title ${pathology.payload.report_title}`);
+  assert(pathology.payload.source_ref === "P20260527001", `bad pathology source ref ${pathology.payload.source_ref}`);
+  assert(pathology.value.includes("胰腺导管腺癌"), "pathology summary missing diagnosis");
+
+  const dischargeText = [
+    "出院记录",
+    "住院号：ZY260001",
+    "入院日期：2026-05-18",
+    "出院日期：2026-05-28",
+    "出院诊断：胰腺恶性肿瘤，梗阻性黄疸。",
+    "出院医嘱：门诊随访，复查肝功能。"
+  ].join("\n");
+  const discharge = context.extractReportCandidatesFromText(dischargeText, { image_name: "discharge.jpg" })[0];
+  assert(discharge.payload.report_type === "出院记录", `bad discharge report type ${discharge.payload.report_type}`);
+  assert(discharge.payload.report_title === "出院记录", `bad discharge report title ${discharge.payload.report_title}`);
+  assert(discharge.payload.report_date === "2026-05-28", `bad discharge report date ${discharge.payload.report_date}`);
+  assert(discharge.payload.source_ref === "ZY260001", `bad discharge source ref ${discharge.payload.source_ref}`);
+  assert(discharge.value.includes("出院诊断"), "discharge summary missing diagnosis");
+}
+
+function verifyInvalidLabCandidateIsRetained(context) {
+  const patient = context.createPatient();
+  const invalid = context.createReviewLabCandidate();
+  patient.candidates = [invalid];
+  const summary = context.confirmCandidateBatch(patient, context.getCandidates(patient));
+  assert(summary.confirmed === 0, `invalid lab candidate should not be confirmed, got ${summary.confirmed}`);
+  assert(patient.candidates.length === 1, "invalid lab candidate should remain pending instead of being discarded");
+  assert(patient.candidates[0].id === invalid.id, "wrong candidate retained after failed confirmation");
+  assert(context.shouldKeepReviewModalOpen(summary), "review modal should remain open when a batch has failed candidates");
+}
+
+function verifyReviewModalStaysOpenWhenOtherCandidatesRemain(context) {
+  const patient = context.createPatient();
+  const lab = context.extractLabCandidatesFromText("WBC\t白细胞\t4.63\t\t\t\t10^9/L\t3.69-9.16", "手动验证", "2026-01-02")[0];
+  const history = context.createHistoryCandidate("吸烟史", "否认", "人工新增");
+  patient.candidates = [lab, history];
+  const summary = context.confirmCandidateBatch(patient, [lab]);
+  assert(summary.confirmed === 1, `expected one lab candidate confirmed, got ${summary.confirmed}`);
+  assert(patient.candidates.length === 1 && patient.candidates[0].id === history.id, "non-lab candidate should remain after confirming labs only");
+  assert(context.shouldKeepReviewModalOpen(summary, patient), "review modal should remain open when other pending candidates remain");
+}
+
+function verifyFriendlyUiCopy() {
+  const visibleSource = [
+    fs.readFileSync("index.html", "utf8"),
+    fs.readFileSync("app.js", "utf8")
+  ].join("\n");
+  ["AI候选", "AI助手", "本地 AI 候选", "AI辅助设置", "模型配置"].forEach((term) => {
+    assert(!visibleSource.includes(term), `clinical UI still exposes old technical copy: ${term}`);
+  });
 }
 
 const context = loadAppContext();
 verifyLabOcrBatchDate(context);
+verifyLabOcrSelectedListDateAndCleanup(context);
 verifyReportOcrCandidateFlow(context);
+verifyReportOcrTypes(context);
+verifyInvalidLabCandidateIsRetained(context);
+verifyReviewModalStaysOpenWhenOtherCandidatesRemain(context);
+verifyFriendlyUiCopy();
 console.log("OCR workflow checks passed");

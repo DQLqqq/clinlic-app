@@ -24,6 +24,14 @@ def box(x: int, y: int, w: int = 40, h: int = 12) -> list[list[int]]:
 
 def main() -> None:
     module = load_module()
+    dependency_status = module.paddle_dependency_status()
+    assert "paddleocr" in dependency_status
+    assert "paddle" in dependency_status
+    assert isinstance(dependency_status["paddleocr"]["installed"], bool)
+    assert isinstance(dependency_status["paddle"]["installed"], bool)
+    if not dependency_status["paddleocr"]["installed"] or not dependency_status["paddle"]["installed"]:
+        assert "wheelhouse" in dependency_status["offline_install_hint"]
+
     lines = [
         {"text": "编号", "box": box(10, 20)},
         {"text": "项目名称", "box": box(110, 20)},

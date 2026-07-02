@@ -72,6 +72,8 @@ python -m pip install --no-index --find-links D:\wheelhouse paddleocr paddlepadd
 http://127.0.0.1:8766/health
 ```
 
+健康检查会返回 `dependencies`，用于判断当前电脑是否已安装 `paddleocr` 和 `paddlepaddle`。如果缺依赖，`ready` 为 `false`，并返回离线 wheelhouse 安装提示；这一步只检查环境，不读取或保存任何图片。
+
 ## 请求
 
 ```json
