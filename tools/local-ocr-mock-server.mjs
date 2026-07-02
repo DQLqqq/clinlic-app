@@ -114,7 +114,22 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/health") {
-    sendJson(res, 200, { ok: true, schema_version: schema, engine: "mock-local-ocr" }, origin);
+    sendJson(
+      res,
+      200,
+      {
+        ok: true,
+        schema_version: schema,
+        engine: "mock-local-ocr",
+        image_retained: false,
+        dependencies: {
+          ready: true,
+          offline_ready: true,
+          model_cache: { ready: true }
+        }
+      },
+      origin
+    );
     return;
   }
 

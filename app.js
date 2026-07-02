@@ -114,7 +114,13 @@ const state = {
     endpoint: "http://127.0.0.1:8766/ocr",
     timeoutMs: 15000,
     lastStatus: "未运行",
-    lastEngine: "手动粘贴"
+    lastEngine: "手动粘贴",
+    serviceStatus: {
+      status_key: "manual_available",
+      status_label: "可手动粘贴文字",
+      doctor_message: "未启动本机识别服务时，可直接粘贴识别文字并生成候选。",
+      next_steps: ["继续手动粘贴文字"]
+    }
   },
   chat: [
     {
@@ -334,6 +340,7 @@ function loadState() {
       state.exportConfig = { ...state.exportConfig, ...(parsed.exportConfig || {}) };
       state.modelConfig = { ...state.modelConfig, ...(parsed.modelConfig || {}) };
       state.ocrConfig = { ...state.ocrConfig, ...(parsed.ocrConfig || {}) };
+      state.ocrConfig.serviceStatus = initialOcrServiceStatusForMode(state.ocrConfig.mode);
       state.importAuditLog = Array.isArray(parsed.importAuditLog) ? parsed.importAuditLog : [];
       state.activeExportPanel = parsed.activeExportPanel || state.activeExportPanel;
       state.activeAiTab = parsed.activeAiTab || state.activeAiTab;
@@ -359,13 +366,18 @@ function saveState() {
       activePatientId: state.activePatientId,
       exportConfig: state.exportConfig,
       modelConfig: state.modelConfig,
-      ocrConfig: state.ocrConfig,
+      ocrConfig: ocrConfigForStorage(),
       importAuditLog: state.importAuditLog.slice(0, 50),
       activeExportPanel: state.activeExportPanel,
       activeAiTab: state.activeAiTab,
       chat: state.chat.slice(-20)
     })
   );
+}
+
+function ocrConfigForStorage() {
+  const { serviceStatus, ...storedConfig } = state.ocrConfig;
+  return storedConfig;
 }
 
 function ensurePatientShape(patient) {
@@ -758,6 +770,7 @@ function renderLabScreenshotImport(patient) {
             </select>
           </div>
           <div class="mode-help">${escapeHtml(getOcrModeHelp(cfg.mode))}</div>
+          ${renderOcrServiceStatusPanel()}
           <div class="ocr-controls">
             <div class="field">
               <label>本批检查日期</label>
@@ -801,9 +814,75 @@ function renderLabScreenshotImport(patient) {
 }
 
 function getOcrModeHelp(mode) {
-  if (mode === "desktopBridge") return "正式桌面版配置后可用；本页面不会伪造F12截屏。";
-  if (mode === "localHttp") return "信息科已启动本机识别服务时选这个；默认地址一般不用改。";
+  if (mode === "desktopBridge") return "该方式需桌面版支持；未配置时请选择本机自动识别或粘贴文字。";
+  if (mode === "localHttp") return "已启动本机识别服务时选这个；默认地址一般不用改。";
   return "把本机识别出的文字粘贴到下方，再生成候选。";
+}
+
+function renderOcrServiceStatusPanel() {
+  const status = normalizedOcrServiceStatus();
+  const steps = Array.isArray(status.next_steps) && status.next_steps.length ? status.next_steps : ["继续手动粘贴文字"];
+  return `
+    <div class="ocr-status-panel">
+      <div>
+        <strong>识别服务状态</strong>
+        <span class="badge ${getOcrServiceStatusLevel(status)}">${escapeHtml(getOcrServiceStatusLabel(status))}</span>
+      </div>
+      <p>${escapeHtml(status.doctor_message || "可以重新检查识别服务，或继续手动粘贴文字。")}</p>
+      ${state.ocrConfig.mode === "localHttp" && status.status_key === "not_started" ? `<div class="ocr-start-hint">启动方法：双击项目文件夹里的 start-ocr-service.bat，保持窗口打开，再点“重新检查”。</div>` : ""}
+      <div class="inline-row">
+        ${steps.includes("查看启动方法") || steps.includes("启动识别服务") ? `<button class="secondary" data-action="show-ocr-start-help" type="button">查看启动方法</button>` : ""}
+        ${state.ocrConfig.mode === "localHttp" ? `<button class="secondary" data-action="check-ocr-service" type="button">重新检查</button>` : ""}
+        <button class="ghost" data-action="use-manual-ocr" type="button">继续手动粘贴文字</button>
+      </div>
+    </div>
+  `;
+}
+
+function normalizedOcrServiceStatus() {
+  if (state.ocrConfig.mode === "manual") {
+    return {
+      status_key: "manual_available",
+      status_label: "可手动粘贴文字",
+      doctor_message: "可以直接粘贴识别文字并生成候选；不会自动入库。",
+      next_steps: ["继续手动粘贴文字"]
+    };
+  }
+  const status = state.ocrConfig.serviceStatus || {};
+  if (status.status_key === "manual_available") {
+    return {
+      status_key: "not_started",
+      status_label: "未启动",
+      doctor_message: "识别服务还没有启动；可以先启动服务，也可以继续手动粘贴文字。",
+      next_steps: ["查看启动方法", "重新检查", "继续手动粘贴文字"]
+    };
+  }
+  return {
+    status_key: status.status_key || "not_started",
+    status_label: getOcrServiceStatusLabel(status),
+    doctor_message: status.doctor_message || "识别服务还没有确认可用；可重新检查，或继续手动粘贴文字。",
+    next_steps: Array.isArray(status.next_steps) ? status.next_steps : ["查看启动方法", "重新检查", "继续手动粘贴文字"]
+  };
+}
+
+function getOcrServiceStatusLabel(status) {
+  const key = typeof status === "string" ? status : status?.status_key;
+  const labels = {
+    available: "识别服务可用",
+    not_started: "未启动",
+    missing_models: "缺少模型文件",
+    missing_dependencies: "缺少识别组件",
+    port_occupied: "端口被占用",
+    manual_available: "可手动粘贴文字",
+    checking: "正在检查"
+  };
+  return labels[key] || status?.status_label || "未启动";
+}
+
+function getOcrServiceStatusLevel(status) {
+  const key = typeof status === "string" ? status : status?.status_key;
+  if (key === "available" || key === "manual_available") return "good";
+  return "warn";
 }
 
 function renderCaptureQueue(workbench) {
@@ -907,6 +986,7 @@ function renderReportImageImport(patient) {
             </div>
           </div>
           <div class="mode-help">${escapeHtml(getOcrModeHelp(cfg.mode))}</div>
+          ${renderOcrServiceStatusPanel()}
           <div class="field">
             <label>报告识别文字</label>
             <textarea data-report-ocr-text placeholder="可粘贴报告识别文字；也可以选择图片后运行本机识别。">${escapeHtml(workbench.ocr_text || "")}</textarea>
@@ -1609,6 +1689,29 @@ async function handleAction(action, button) {
     render();
     return;
   }
+  if (action === "show-ocr-start-help") {
+    toast("请在项目文件夹双击 start-ocr-service.bat；启动窗口保持打开。");
+    return;
+  }
+  if (action === "check-ocr-service") {
+    const status = await checkOcrServiceStatus();
+    render();
+    toast(`识别服务状态：${getOcrServiceStatusLabel(status)}`);
+    return;
+  }
+  if (action === "use-manual-ocr") {
+    state.ocrConfig.mode = "manual";
+    state.ocrConfig.serviceStatus = {
+      status_key: "manual_available",
+      status_label: "可手动粘贴文字",
+      doctor_message: "可以直接粘贴识别文字并生成候选；不会自动入库。",
+      next_steps: ["继续手动粘贴文字"]
+    };
+    saveState();
+    render();
+    toast("已切换为手动粘贴文字");
+    return;
+  }
   if (action === "apply-ocr-batch-date") {
     const date = getOcrWorkbench(patient).batch_date || "";
     const count = applyBatchDateToLabCandidates(patient, date);
@@ -2188,6 +2291,8 @@ function bindOcrEvents(patient) {
     const updateOcrConfig = () => {
       const key = input.dataset.ocrConfig;
       state.ocrConfig[key] = key === "timeoutMs" ? normalizeOcrTimeout(input.value) : input.value;
+      if (key === "mode") state.ocrConfig.serviceStatus = initialOcrServiceStatusForMode(state.ocrConfig.mode);
+      if (key === "endpoint") state.ocrConfig.serviceStatus = initialOcrServiceStatusForMode(state.ocrConfig.mode);
       saveState();
       if (key === "mode") {
         renderActiveTab();
@@ -2202,6 +2307,31 @@ function bindOcrEvents(patient) {
       if (input.tagName === "SELECT") updateOcrConfig();
     });
   });
+}
+
+function initialOcrServiceStatusForMode(mode) {
+  if (mode === "manual") {
+    return {
+      status_key: "manual_available",
+      status_label: "可手动粘贴文字",
+      doctor_message: "可以直接粘贴识别文字并生成候选；不会自动入库。",
+      next_steps: ["继续手动粘贴文字"]
+    };
+  }
+  if (mode === "localHttp") {
+    return {
+      status_key: "not_started",
+      status_label: "未启动",
+      doctor_message: "识别服务还没有启动；可以先启动服务，也可以继续手动粘贴文字。",
+      next_steps: ["查看启动方法", "重新检查", "继续手动粘贴文字"]
+    };
+  }
+  return {
+    status_key: "not_started",
+    status_label: "未启动",
+    doctor_message: "桌面版识别桥接尚未确认可用；可以继续手动粘贴文字。",
+    next_steps: ["继续手动粘贴文字"]
+  };
 }
 
 function bindReportOcrEvents(patient) {
@@ -3085,12 +3215,115 @@ async function requestOcrText(request) {
       assertLocalOcrResponseUrl(response.url);
       const payload = await readOcrResponsePayload(response);
       if (!response.ok) throw new Error(extractOcrErrorMessage(payload) || `HTTP ${response.status}`);
+      const contractError = validateLocalOcrContractPayload(payload);
+      if (contractError) throw new Error(contractError);
       return normalizeOcrResponse(payload);
     } finally {
       window.clearTimeout(timer);
     }
   }
   throw new Error("未知识别方式");
+}
+
+async function checkOcrServiceStatus() {
+  if (state.ocrConfig.mode !== "localHttp") {
+    state.ocrConfig.serviceStatus = initialOcrServiceStatusForMode(state.ocrConfig.mode);
+    saveState();
+    return state.ocrConfig.serviceStatus;
+  }
+  state.ocrConfig.serviceStatus = {
+    status_key: "checking",
+    status_label: "正在检查",
+    doctor_message: "正在检查本机识别服务。",
+    next_steps: ["继续手动粘贴文字"]
+  };
+  const timeoutMs = Math.min(5000, normalizeOcrTimeout(state.ocrConfig.timeoutMs));
+  try {
+    const healthUrl = localOcrHealthEndpoint(state.ocrConfig.endpoint);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(healthUrl, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+        redirect: "error"
+      });
+      assertLocalOcrResponseUrl(response.url);
+      const payload = await readOcrResponsePayload(response);
+      state.ocrConfig.serviceStatus = ocrServiceStatusFromHealth(response, payload);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  } catch {
+    state.ocrConfig.serviceStatus = {
+      status_key: "not_started",
+      status_label: "未启动",
+      doctor_message: "识别服务还没有启动；可以先启动服务，也可以继续手动粘贴文字。",
+      next_steps: ["启动识别服务", "重新检查", "继续手动粘贴文字"]
+    };
+  }
+  saveState();
+  return state.ocrConfig.serviceStatus;
+}
+
+function localOcrHealthEndpoint(endpoint) {
+  const url = new URL(normalizeLocalOcrEndpoint(endpoint));
+  url.pathname = "/health";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function ocrServiceStatusFromHealth(response, payload) {
+  if (!response.ok || !payload || typeof payload !== "object" || payload.ok !== true || payload.schema_version !== OCR_SCHEMA_VERSION) {
+    return {
+      status_key: "port_occupied",
+      status_label: "端口被占用",
+      doctor_message: "识别服务端口已有响应，但不是本系统的识别服务。",
+      next_steps: ["关闭占用端口的程序", "重新检查", "继续手动粘贴文字"]
+    };
+  }
+  const dependencies = payload.dependencies || {};
+  const modelCache = dependencies.model_cache || {};
+  if (dependencies.ready === false) {
+    return {
+      status_key: "missing_dependencies",
+      status_label: "缺少识别组件",
+      doctor_message: "这台电脑缺少识别组件，请联系信息科处理。",
+      next_steps: ["联系信息科处理", "重新检查", "继续手动粘贴文字"]
+    };
+  }
+  if (dependencies.offline_ready === false || modelCache.ready === false) {
+    return {
+      status_key: "missing_models",
+      status_label: "缺少模型文件",
+      doctor_message: "离线识别包不完整，请联系信息科处理；当前仍可继续手动粘贴文字。",
+      next_steps: ["联系信息科处理", "重新检查", "继续手动粘贴文字"]
+    };
+  }
+  if (dependencies.ready !== true || dependencies.offline_ready !== true || modelCache.ready !== true || payload.image_retained !== false) {
+    return {
+      status_key: "port_occupied",
+      status_label: "端口被占用",
+      doctor_message: "识别服务端口已有响应，但不能确认是可用的本系统识别服务。",
+      next_steps: ["关闭占用端口的程序", "重新检查", "继续手动粘贴文字"]
+    };
+  }
+  return {
+    status_key: "available",
+    status_label: "识别服务可用",
+    doctor_message: "识别服务已启动。下一步选择图片后点击识别；识别结果仍需人工确认后才入库。",
+    next_steps: ["重新检查", "继续手动粘贴文字"]
+  };
+}
+
+function validateLocalOcrContractPayload(payload) {
+  if (!payload || typeof payload !== "object") return "识别服务返回格式错误";
+  if (payload.ok !== true) return extractOcrErrorMessage(payload) || "识别失败";
+  if (payload.schema_version !== OCR_SCHEMA_VERSION) return "识别服务版本不匹配";
+  if (payload.image_retained !== false) return "识别服务未确认不保存图片";
+  return "";
 }
 
 async function readOcrResponsePayload(response) {

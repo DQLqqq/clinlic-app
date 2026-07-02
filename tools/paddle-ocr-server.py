@@ -182,6 +182,16 @@ def health_payload(config: ServerConfig) -> dict[str, Any]:
     }
 
 
+def offline_start_block_reason(dependencies: dict[str, Any]) -> str:
+    if not dependencies.get("ready"):
+        missing = "、".join(str(item) for item in dependencies.get("missing") or []) or "识别组件"
+        return f"缺少识别组件：{missing}。请先完成离线安装。"
+    model_cache = dependencies.get("model_cache") or {}
+    if not dependencies.get("offline_ready", dependencies.get("ready")) or not model_cache.get("ready", True):
+        return "离线识别模型文件不完整。请先复制完整离线模型文件后再启动服务。"
+    return ""
+
+
 def normalize_host(value: str) -> str:
     host = (value or "127.0.0.1").strip().strip("[]").lower()
     if host not in LOCAL_HOSTS:
@@ -217,7 +227,7 @@ def cors_headers(origin: str | None, allow_file_origin: bool) -> dict[str, str]:
         allow_origin = "http://127.0.0.1"
     return {
         "Access-Control-Allow-Origin": allow_origin,
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, X-Clinical-OCR-Schema",
         "Access-Control-Max-Age": "600",
         "Vary": "Origin",
@@ -993,6 +1003,10 @@ def parse_args() -> ServerConfig:
 
 def main() -> None:
     config = parse_args()
+    block_reason = offline_start_block_reason(paddle_dependency_status())
+    if block_reason:
+        print(f"无法启动识别服务：{block_reason}", file=sys.stderr)
+        raise SystemExit(2)
     handler_class = make_handler(config)
     server = make_server(config, handler_class)
     url = f"http://{format_host(config.host)}:{config.port}/ocr"

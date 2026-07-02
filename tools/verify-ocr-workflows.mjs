@@ -53,7 +53,20 @@ function loadAppContext() {
     window: {}
   };
   vm.createContext(context);
-  vm.runInContext(code, context);
+  vm.runInContext(
+    `${code}
+globalThis.__ocrWorkflowApi = {
+  state,
+  renderLabScreenshotImport,
+  renderReportImageImport,
+  saveState,
+  STORAGE_KEY,
+  getOcrServiceStatusLabel: typeof getOcrServiceStatusLabel === "function" ? getOcrServiceStatusLabel : undefined,
+  ocrServiceStatusFromHealth: typeof ocrServiceStatusFromHealth === "function" ? ocrServiceStatusFromHealth : undefined,
+  validateLocalOcrContractPayload: typeof validateLocalOcrContractPayload === "function" ? validateLocalOcrContractPayload : undefined
+};`,
+    context
+  );
   return context;
 }
 
@@ -297,6 +310,66 @@ function verifyFriendlyUiCopy() {
   });
 }
 
+function verifyOcrServiceStatusUi(context) {
+  const patient = context.createPatient();
+  const api = context.__ocrWorkflowApi;
+  api.state.ocrConfig.mode = "localHttp";
+  api.state.ocrConfig.serviceStatus = {
+    status_key: "not_started",
+    status_label: "未启动",
+    doctor_message: "识别服务还没有启动。",
+    next_steps: ["启动识别服务", "重新检查", "继续手动粘贴文字"]
+  };
+  const labHtml = api.renderLabScreenshotImport(patient);
+  ["识别服务状态", "未启动", "启动方法", "查看启动方法", "重新检查", "继续手动粘贴文字"].forEach((text) => {
+    assert(labHtml.includes(text), `lab OCR UI missing service status text/action: ${text}`);
+  });
+  assert(!labHtml.includes("PaddleOCR"), "lab OCR status panel should not expose PaddleOCR jargon");
+  assert(!labHtml.includes("HTTP 127.0.0.1"), "lab OCR status panel should not expose raw HTTP status text");
+
+  const reportHtml = api.renderReportImageImport(patient);
+  ["识别服务状态", "未启动", "重新检查", "继续手动粘贴文字"].forEach((text) => {
+    assert(reportHtml.includes(text), `report OCR UI missing service status text/action: ${text}`);
+  });
+  assert(api.getOcrServiceStatusLabel({ status_key: "available" }) === "识别服务可用", "available status label mismatch");
+  assert(api.getOcrServiceStatusLabel({ status_key: "missing_models" }) === "缺少模型文件", "missing model status label mismatch");
+  assert(api.getOcrServiceStatusLabel({ status_key: "port_occupied" }) === "端口被占用", "occupied port status label mismatch");
+  const wrongSchema = api.ocrServiceStatusFromHealth({ ok: true }, { ok: true, schema_version: "other-ocr-v1" });
+  assert(wrongSchema.status_key === "port_occupied", "wrong health schema should be treated as occupied port");
+  const missingDependencies = api.ocrServiceStatusFromHealth({ ok: true }, { ok: true, schema_version: "local-ocr-v1" });
+  assert(missingDependencies.status_key === "port_occupied", "health without explicit dependency readiness should not be available");
+  const missingModels = api.ocrServiceStatusFromHealth(
+    { ok: true },
+    { ok: true, schema_version: "local-ocr-v1", dependencies: { ready: true, offline_ready: false, model_cache: { ready: false } } }
+  );
+  assert(missingModels.status_key === "missing_models", "missing model health status mismatch");
+  assert(missingModels.doctor_message.includes("联系信息科"), "missing model status should tell doctors to contact IT");
+  assert(api.validateLocalOcrContractPayload({ ok: true, schema_version: "local-ocr-v1", text: "abc", image_retained: false }) === "", "valid OCR contract should pass");
+  assert(api.validateLocalOcrContractPayload({ ok: true, schema_version: "other", text: "abc", image_retained: false }), "wrong OCR schema should be rejected");
+  assert(api.validateLocalOcrContractPayload({ ok: true, schema_version: "local-ocr-v1", text: "abc", image_retained: true }), "image-retained OCR response should be rejected");
+
+  api.state.ocrConfig.mode = "desktopBridge";
+  api.state.ocrConfig.serviceStatus = {
+    status_key: "not_started",
+    status_label: "未启动",
+    doctor_message: "桌面版识别桥接尚未确认可用；可以继续手动粘贴文字。",
+    next_steps: ["继续手动粘贴文字"]
+  };
+  const bridgeHtml = api.renderLabScreenshotImport(patient);
+  assert(!bridgeHtml.includes("重新检查"), "desktop bridge mode should not show local HTTP recheck");
+
+  api.state.ocrConfig.mode = "localHttp";
+  api.state.ocrConfig.serviceStatus = {
+    status_key: "available",
+    status_label: "识别服务可用",
+    doctor_message: "stale runtime status",
+    next_steps: ["重新检查"]
+  };
+  api.saveState();
+  const saved = JSON.parse(context.localStorage.getItem(api.STORAGE_KEY));
+  assert(!("serviceStatus" in saved.ocrConfig), "runtime OCR service status should not be persisted");
+}
+
 const context = loadAppContext();
 verifyLabOcrBatchDate(context);
 verifyLabOcrSelectedListDateAndCleanup(context);
@@ -310,4 +383,5 @@ verifyReviewModalStaysOpenWhenOtherCandidatesRemain(context);
 verifyLabOcrWorkbenchClearsWhenOnlyNonLabCandidatesRemain(context);
 verifyPendingCaptureQueueItemsArePreserved(context);
 verifyFriendlyUiCopy();
+verifyOcrServiceStatusUi(context);
 console.log("OCR workflow checks passed");

@@ -496,6 +496,38 @@ button:disabled {
   line-height: 1.45;
 }
 
+.ocr-status-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  margin: 8px 0 10px;
+}
+
+.ocr-status-panel > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ocr-status-panel p {
+  margin: 6px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ocr-start-hint {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f6fbfe;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .advanced-box {
   margin: 10px 0;
   border: 1px solid var(--line);

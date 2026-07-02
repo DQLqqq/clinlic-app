@@ -38,6 +38,7 @@ def box(x: int, y: int, w: int = 40, h: int = 12) -> list[list[int]]:
 
 def main() -> None:
     module = load_module()
+    check_module = load_check_module()
     dependency_status = module.paddle_dependency_status()
     assert "paddleocr" in dependency_status
     assert "paddle" in dependency_status
@@ -47,6 +48,19 @@ def main() -> None:
     assert isinstance(dependency_status["model_cache"]["ready"], bool)
     assert isinstance(dependency_status["paddleocr"]["installed"], bool)
     assert isinstance(dependency_status["paddle"]["installed"], bool)
+    assert module.offline_start_block_reason({"ready": False, "missing": ["paddleocr"], "model_cache": {"ready": False}}).startswith("缺少识别组件")
+    assert module.offline_start_block_reason({"ready": True, "offline_ready": False, "model_cache": {"ready": False}}).startswith("离线识别模型文件不完整")
+    assert module.offline_start_block_reason({"ready": True, "offline_ready": True, "model_cache": {"ready": True}}) == ""
+    assert check_module.is_healthy_service_payload(
+        {
+            "ok": True,
+            "schema_version": module.SCHEMA_VERSION,
+            "image_retained": False,
+            "dependencies": {"ready": True, "offline_ready": True, "model_cache": {"ready": True}},
+        },
+        module.SCHEMA_VERSION,
+    )
+    assert not check_module.is_healthy_service_payload({"ok": True, "schema_version": module.SCHEMA_VERSION}, module.SCHEMA_VERSION)
     with tempfile.TemporaryDirectory() as empty_model_dir:
         cache_status = module.paddle_model_cache_status(empty_model_dir)
         assert cache_status["ready"] is False
@@ -56,7 +70,6 @@ def main() -> None:
         partial_status = module.paddle_model_cache_status(empty_model_dir)
         assert partial_status["ready"] is False
         assert any("inference.pdiparams" in item for item in partial_status["missing"])
-        check_module = load_check_module()
         old_model_dir = os.environ.get("PADDLE_PDX_MODEL_DIR")
         os.environ["PADDLE_PDX_MODEL_DIR"] = empty_model_dir
         try:
@@ -201,6 +214,65 @@ def main() -> None:
     assert "--no-index" in cli_payload["dependencies"]["install_plan"]["offline_install_command"]
     assert cli_payload["image_retained"] is False
     assert "data_url" not in cli.stdout
+    missing_model_status = check_module.classify_deployment_status(
+        {
+            "ready": True,
+            "offline_ready": False,
+            "model_cache": {"ready": False, "missing": ["PP-OCRv6_medium_rec"]},
+            "missing": [],
+        },
+        {"healthy": False, "port_open": False},
+    )
+    assert missing_model_status["status_key"] == "missing_models"
+    assert missing_model_status["status_label"] == "缺少模型文件"
+    assert "继续手动粘贴文字" in " ".join(missing_model_status["next_steps"])
+
+    not_started_status = check_module.classify_deployment_status(
+        {"ready": True, "offline_ready": True, "model_cache": {"ready": True}, "missing": []},
+        {"healthy": False, "port_open": False},
+    )
+    assert not_started_status["status_key"] == "not_started"
+    assert not_started_status["status_label"] == "未启动"
+
+    running_status = check_module.classify_deployment_status(
+        {"ready": True, "offline_ready": True, "model_cache": {"ready": True}, "missing": []},
+        {"healthy": True, "port_open": True},
+    )
+    assert running_status["status_key"] == "available"
+    assert running_status["status_label"] == "识别服务可用"
+
+    running_with_missing_models = check_module.classify_deployment_status(
+        {
+            "ready": True,
+            "offline_ready": False,
+            "model_cache": {"ready": False, "missing": ["PP-OCRv6_medium_det"]},
+            "missing": [],
+        },
+        {"healthy": True, "port_open": True},
+    )
+    assert running_with_missing_models["status_key"] == "missing_models"
+
+    occupied_status = check_module.classify_deployment_status(
+        {"ready": True, "offline_ready": True, "model_cache": {"ready": True}, "missing": []},
+        {"healthy": False, "port_open": True},
+    )
+    assert occupied_status["status_key"] == "port_occupied"
+    assert occupied_status["status_label"] == "端口被占用"
+
+    for script_name in ["start-ocr-service.ps1", "start-ocr-service.bat", "check-ocr-service.ps1", "check-ocr-service.bat"]:
+        script_path = Path(script_name)
+        assert script_path.exists(), f"{script_name} missing"
+        text = script_path.read_text(encoding="utf-8")
+        assert "127.0.0.1" in text, f"{script_name} must bind/check localhost only"
+        assert "8766" in text, f"{script_name} must use OCR service port 8766"
+        assert "store_image" not in text.lower(), f"{script_name} should not persist images"
+        forbidden = ["Invoke-WebRequest", "curl ", "wget ", "pip install", "pip download"]
+        assert not any(term.lower() in text.lower() for term in forbidden), f"{script_name} should not download or install online"
+    ps1_text = Path("start-ocr-service.ps1").read_text(encoding="utf-8")
+    assert "paddle-ocr-server.py" in ps1_text
+    assert "--allow-file-origin" in ps1_text
+    assert "不会联网" in ps1_text
+    assert "不会保存图片" in ps1_text
     print("PaddleOCR debug payload checks passed")
 
 
